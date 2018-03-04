@@ -1,4 +1,3 @@
-
 type 'a t =
   | Void : unit t
   | Bool : bool t
@@ -49,4 +48,12 @@ let rec person () =
   ("friends", List(Defer(fun () -> person ())), 4) @>
   emptys |> mkstruct "Person" 0xa93fc509624c72d9L;;
 
-let x = person ()
+let get : type a. bytes -> a t -> a =
+  fun buf addr -> 
+    failwith "foo"
+;;
+
+let set : type a. bytes -> a t -> a -> unit =
+  fun buf addr x -> 
+    failwith "foO"
+;;
