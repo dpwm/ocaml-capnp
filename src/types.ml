@@ -1,5 +1,5 @@
 module Types = struct
-  type 'a structure = unit
+  type 'a _structure = Int64.t
 
   type 'a t =
     | Void : unit t
@@ -17,29 +17,41 @@ module Types = struct
     | Text : string t
     | Data : string t
     | List : 'a t -> 'a listproxy t
-    | Struct : 'z structure * string * Unsigned.Int64.t * 'a struct_t -> ('z structure * 'a) t
+    | Struct : Unsigned.Int64.t -> ('z _structure) t
     | Defer : (unit -> 'a t) -> unit t
-
-  and 'a struct_t =
-    | Cons : (string * 'a t * int * 'b struct_t) -> ('a * 'b) struct_t
-    | End : unit struct_t
 
   and 'a listproxy = ListProxy : 'a listproxy
 
-  let field (a, b, c) d = Cons (a, b, c, d)
-  let (@>) = field;;
-  let emptys = End;;
+  let i8 = Int8
+  let i16 = Int16
+  let i32 = Int32
+  let i64 = Int64
 
-  let int16 = Int16
-  let int32 = Int32
+  let u64 = UInt64
+  let u32 = UInt32
+  let u16 = UInt16
+  let u8 = UInt8
 
   let list x = List x
-  let defer f = Defer f
+  let defer f = Defer f;;
 
-  let structure = ();;
+  type 'a structure = 'a _structure t;;
+  type ('a, 'b) field = { struct_type: 'a structure; typ : 'b t; offset : int; default : 'b option}
 
-  let mkstruct t name id composite = Struct (t, name, id, composite);;
+  let field ?default struct_type typ offset = {struct_type;typ;offset;default}
+  let structure id = Struct id;;
+
 end;;
+
+module Write = struct
+  let write_int8 buf offset v =
+    Bytes.set buf offset (Char.chr (v land 255));;
+  let write_int16 buf offset v =
+    write_int8 buf offset v;
+    write_int8 buf (offset + 1) (v lsr 8);
+  ;;
+end;;
+
 
 module Read = struct
   type ptr = 
@@ -121,83 +133,61 @@ module Read = struct
   ;;
 
 
-end
-;;
+end;;
 
 open Types
 
 
+module Date = struct
+  type t;;
+  let t : t structure = structure 0xef29c66fa74a8c93L;;
 
-type date
+  let year = field ~default:2017 t i16 0;;
+  let month = field t i8 16;;
+  let day = field t i8 24;;
+end;;
 
-let date =
-  ("year", Int16, 0) @>
-  ("month", Int8, 16) @>
-  ("day", Int8, 24) @>
-  emptys |> mkstruct (structure : date structure) "Date" 0xef29c66fa74a8c93L;;
+module Person = struct
+  type t;;
+  let t : t structure = structure 0xef29c66fa74a8c93L;;
+
+  let dob = field t Date.t 0;;
+  let friends = field t (List t) 1;;
+end;;
 
 
-type phonenumber
-let phonenumber = 
-  ("number", Text, 0) @>
-  ("type", Int16, 0) @>
-  emptys |> mkstruct (structure : phonenumber structure) "PhoneNumber" 0xd68b5724fed51061L;;
-
-type person
-let rec person () =
-  ("name", Text, 0) @> 
-  ("email", Text, 1) @> 
-  ("phones", List(phonenumber), 2) @>
-  ("id", Int32, 0) @> 
-  ("friends", list (defer person), 4) @>
-  emptys |> mkstruct (structure : person structure) "Person" 0xa93fc509624c72d9L;;
-
-(*
-
-let get : type a. bytes -> a t -> a =
-  fun buf addr -> 
-    failwith "foo"
+let apply_default : type a. ('b, a) field -> a -> a =
+  fun f ->
+  match (f.default, f.typ) with
+  | (None, _) -> fun z -> z
+  | (Some x, Int16) -> 
+      fun z -> x lxor z
+  | (Some x, Int8) -> 
+      fun z -> x lxor z
+  | (Some x, Int32) ->
+      fun z -> Int32.logxor x z
+  | (Some x, _) ->
+      fun z -> x
 ;;
 
-let set : type a. bytes -> a t -> a -> unit =
-  fun buf addr x -> 
-    failwith "foO"
+
+let get : type a. ('b, a) field -> (bytes * int) -> a =
+  fun f (bs, offset) -> 
+    (* Read the *)
+    match f.typ with
+    | Int16 -> Read.read_int16 bs (offset + f.offset lsr 3) |> apply_default f
+    | Int8 -> Read.read_int8 bs (offset + f.offset lsr 3) |> apply_default f
 ;;
 
+let set : type a. ('b, a) field -> (bytes * int) -> a -> unit =
+  fun f (bs, offset) v -> 
+    let v = apply_default f v in
+    match f.typ with
+    | Int16 -> Write.write_int16 bs (offset + f.offset lsr 3) v
+    | Int8 -> Write.write_int8 bs (offset + f.offset lsr 3) v
+;;
 
 let () =
-  let xin = open_in "person.bin" in
-  let l = in_channel_length xin in
-  let buf = Bytes.create l in
-
-  really_input xin buf 0 l;
-
-  let buf, offset, (segment_lengths, (u, ptr)) = 
-    (buf, 0, ()) |>
-    read_frame |>
-    read_ptr
-  in
-  Printf.printf "%d\n" offset;
-  match ptr with
-  | StructPtr (a, b) -> Printf.printf "))) %d %d\n" a b;
-  ()
+  let buf = "\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x05\x00\x0c\x03\x00\x00\x00\x00" |> Bytes.of_string in
+  get Date.year (buf,16) |> Printf.printf "%d\n"
 ;;
-
-
-(*
-module Person = struct
-  let id : 'a t -> int t = function 
-    | Struct ("Person", _, _) -> failwith "wrong."
-    | _ -> failwith "wrong."
-end;;
-  *)
-
-(* A better interface would be: *)
-(*
-module Person = struct
-  type t
-  let name = record_field -> String t
-end;;
-
-*)
-*)
