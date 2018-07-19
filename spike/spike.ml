@@ -57,6 +57,9 @@ module Decl = struct
 
   type 'a structure = 'a struct_data t
   type ('t, 'a) field = Field of ('a t * int)
+  type ('t, 'a) group = Group of 'a t
+
+  type stored = Stored : 'a t -> stored
 
   let void = Void
   let bool = Bool
@@ -79,6 +82,9 @@ module Decl = struct
 
   let field: type a. int -> a t -> 't t -> ('t, a) field = 
     fun n t2 t1 -> Field (t2, n)
+
+  let group : type a. a t -> 't t -> ('t, a) group =
+    fun t2 t1 -> Group t2
 
 end
 
@@ -137,8 +143,14 @@ let ptr n c =
 
   !c
 
+let getGroup : type a. ('b, a) Decl.group -> 'b cursor -> a cursor =
+  let open Decl in
+  fun (Group t) c ->
+    match t with
+    | Struct -> c |> output StructData
+    | _ -> failwith "Can only get group from struct"
 
-let rec get : type a. ('b, a) Decl.field -> 'b cursor -> a cursor =
+let get : type a. ('b, a) Decl.field -> 'b cursor -> a cursor =
   let open Decl in
   fun (Field (t, n)) c ->
     let c' = movbits n c in
@@ -241,72 +253,95 @@ let make : type a. a Decl.t -> data_t -> a cursor =
     get (Field (typ,0)) {!c with frames}
     
 module Type = struct
-  open Decl
+  open Decl type t let t: t structure = structure
 
-  type t let t: t structure = structure
+  module Brand = struct
+    open Decl type t let t : t structure = structure
+  end
 
-  let union_tag = t |> field 0 uint16
+  module List = struct
+    open Decl type t let t: t structure = structure
+  end
+
+  module Enum = struct
+    open Decl type t let t: t structure = structure
+  end
+
+  module Interface = struct
+    open Decl type t let t: t structure = structure
+
+    let typeId = t |> field 64 uint64
+    let brand = t |> field 0 Brand.t
+  end
+
+  module Struct = struct
+    open Decl type t let t: t structure = structure
+
+    let typeId = t |> field 64 uint64
+    let brand = t |> field 0 Brand.t
+  end
+
+  module AnyPointer = struct
+    open Decl type t let t: t structure = structure
+  end
+
+
+  type union =
+    | Void
+    | Bool
+    | Int8
+    | Int16
+    | Int32
+    | Int64
+    | Uint8
+    | Uint16
+    | Uint32
+    | Uint64
+    | Float32
+    | Float64
+    | Text
+    | Data
+    | List of List.t struct_data cursor
+    | Enum of Enum.t struct_data cursor
+    | Struct of Struct.t struct_data cursor
+    | Interface of Interface.t struct_data cursor
+    | AnyPointer of AnyPointer.t struct_data cursor
+
+  let get_union c = 
+    let union_tag = t |> field 0 uint16 in
+    let list_ = t |> group List.t in
+    let enum_ = t |> group Enum.t in
+    let struct_ = t |> group Struct.t in
+    let interface_ = t |> group Interface.t in
+    let anypointer_ = t |> group AnyPointer.t in
+    c |> get union_tag |> result |> function
+      |  0 -> Void
+      |  1 -> Bool
+      |  2 -> Int8
+      |  3 -> Int16
+      |  4 -> Int32
+      |  5 -> Int64
+      |  6 -> Uint8
+      |  7 -> Uint16
+      |  8 -> Uint32
+      |  9 -> Uint64
+      | 10 -> Float32
+      | 11 -> Float64
+      | 12 -> Text
+      | 13 -> Data
+      | 14 -> List (c |> getGroup list_)
+      | 15 -> Enum (c |> getGroup enum_)
+      | 16 -> Struct (c |> getGroup struct_)
+      | 17 -> Interface (c |> getGroup interface_) 
+      | 18 -> AnyPointer (c |> getGroup anypointer_) 
+      | _ -> failwith "Not matched"
+
+
 end
-
-  (*
-   *
-struct Type @0xd07378ede1f9cc60 {  # 24 bytes, 1 ptrs
-  union {  # tag bits [0, 16)
-    void @0 :Void;  # bits[0, 0), union tag = 0
-    bool @1 :Void;  # bits[0, 0), union tag = 1
-    int8 @2 :Void;  # bits[0, 0), union tag = 2
-    int16 @3 :Void;  # bits[0, 0), union tag = 3
-    int32 @4 :Void;  # bits[0, 0), union tag = 4
-    int64 @5 :Void;  # bits[0, 0), union tag = 5
-    uint8 @6 :Void;  # bits[0, 0), union tag = 6
-    uint16 @7 :Void;  # bits[0, 0), union tag = 7
-    uint32 @8 :Void;  # bits[0, 0), union tag = 8
-    uint64 @9 :Void;  # bits[0, 0), union tag = 9
-    float32 @10 :Void;  # bits[0, 0), union tag = 10
-    float64 @11 :Void;  # bits[0, 0), union tag = 11
-    text @12 :Void;  # bits[0, 0), union tag = 12
-    data @13 :Void;  # bits[0, 0), union tag = 13
-    list :group {  # union tag = 14
-      elementType @14 :Type;  # ptr[0]
-    }
-    enum :group {  # union tag = 15
-      typeId @15 :UInt64;  # bits[64, 128)
-      brand @21 :Brand;  # ptr[0]
-    }
-    struct :group {  # union tag = 16
-      typeId @16 :UInt64;  # bits[64, 128)
-      brand @22 :Brand;  # ptr[0]
-    }
-    interface :group {  # union tag = 17
-      typeId @17 :UInt64;  # bits[64, 128)
-      brand @23 :Brand;  # ptr[0]
-    }
-    anyPointer :group {  # union tag = 18
-      union {  # tag bits [64, 80)
-        unconstrained :group {  # union tag = 0
-          union {  # tag bits [80, 96)
-            anyKind @18 :Void;  # bits[0, 0), union tag = 0
-            struct @25 :Void;  # bits[0, 0), union tag = 1
-            list @26 :Void;  # bits[0, 0), union tag = 2
-            capability @27 :Void;  # bits[0, 0), union tag = 3
-          }
-        }
-        parameter :group {  # union tag = 1
-          scopeId @19 :UInt64;  # bits[128, 192)
-          parameterIndex @20 :UInt16;  # bits[80, 96)
-        }
-        implicitMethodParameter :group {  # union tag = 2
-          parameterIndex @24 :UInt16;  # bits[80, 96)
-        }
-      }
-    }
-  }
-}
-   * *)
 
 module Brand = struct
   open Decl
-  type t let t : t structure = structure
+  include Type.Brand
 
   module Binding = struct
     type t let t : t structure = structure
@@ -357,6 +392,7 @@ module Node = struct
 
   type t let t : t structure = structure
 
+
   module SourceInfo = struct 
     type t let t : t structure = structure
 
@@ -366,10 +402,10 @@ module Node = struct
     module Member = struct
       type t let t : t structure = structure
 
-      let docComment = field 0 text
+      let docComment = t |> field 0 text
     end
 
-    let members  = field 1 @@ list Member.t
+    let members  = t |> field 1 @@ list Member.t
   end
 
   module Parameter = struct
@@ -385,6 +421,7 @@ module Node = struct
     let name = t |> field 0 text
   end
 
+
   let id = t |> field 0 uint64
   let displayName = t |> field 0 text
   let displayNamePrefixLength = t |> field 64 uint32
@@ -393,7 +430,54 @@ module Node = struct
   let isGeneric = t |> field 288 bool
   let nestedNodes = t |> field 1 NestedNode.t
   let annotations = t |> field 2 Annotation.t
-  let union_tag = t |> field 96 uint16
+
+  module Struct = struct
+    type t let t : t structure = structure
+  end
+
+  module Enum = struct
+    type t let t : t structure = structure
+  end
+
+  module Interface = struct
+    type t let t : t structure = structure
+  end
+
+  module Const = struct
+    type t let t : t structure = structure
+  end
+
+  module Annotation = struct
+    type t let t : t structure = structure
+
+    let id = t |> field 0 int16
+  end
+
+  type union = 
+    | File
+    | Struct of Struct.t struct_data cursor
+    | Enum of Enum.t struct_data cursor
+    | Interface of Interface.t struct_data cursor
+    | Const of Const.t struct_data cursor
+    | Annotation of Annotation.t struct_data cursor
+
+  let get_union c = 
+    let union_tag = t |> field 96 uint16 in
+    let struct_ = t |> group Struct.t in
+    let enum_ = t |> group Enum.t in
+    let interface_ = t |> group Interface.t in
+    let const_ = t |> group Const.t in
+    let annotation_ = t |> group Annotation.t in
+    c |> get union_tag |> result |> function
+      | 0 -> File
+      | 1 -> Struct (c |> getGroup struct_)
+      | 2 -> Enum (c |> getGroup enum_)
+      | 3 -> Interface (c |> getGroup interface_)
+      | 4 -> Const (c |> getGroup const_)
+      | 5 -> Annotation (c |> getGroup annotation_)
+      | _ -> failwith "unmatched"
+
+
 
   let enumerants = t |> field 3 Enumerant.t
 end
@@ -433,29 +517,43 @@ module CodeGeneratorRequest = struct
   let capnpVersion = t |> field 2 CapnpVersion.t
   let sourceInfo = t |> field 3 @@ list Node.SourceInfo.t
 end
-(*
- *
-  capnpVersion @2 :CapnpVersion;  # ptr[2]
-  nodes @0 :List(Node);  # ptr[0]
-  sourceInfo @3 :List(Node.SourceInfo);  # ptr[3]
-  requestedFiles @1 :List(RequestedFile);  # ptr[1]
-  struct RequestedFile @0xcfea0eb02e810062 {  # 8 bytes, 2 ptrs
-    id @0 :UInt64;  # bits[0, 64)
-    filename @1 :Text;  # ptr[0]
-    imports @2 :List(Import);  # ptr[1]
-    struct Import @0xae504193122357e5 {  # 8 bytes, 1 ptrs
-      id @0 :UInt64;  # bits[0, 64)
-      name @1 :Text;  # ptr[0]
-    }
-  }
-  *)
 
 let cgr = make CodeGeneratorRequest.t a
+
+let get_name c =
+  let name = c |> get Node.displayName |> result in
+  let prefix = c |> get Node.displayNamePrefixLength |> result |> Int32.to_int in
+  String.sub name prefix  (String.length name - prefix)
+
+module Int64Map = Map.Make(Int64)
+
+module Infix = struct
+  let (=>*) a b = a |> get b |> result
+  let (=>) a b = a |> get b 
+end
+
 
 let () =
   let open CodeGeneratorRequest in
   let open CapnpVersion in
-  cgr |> get nodes |> result |> Array.iter (fun x ->
-    x |> get Node.displayName |> result |> print_endline;
-    x |> get Node.union_tag |> result |> Printf.printf "tag: %d\n"
-  )
+  let open Infix in
+
+  let node_map = cgr =>* nodes |> Array.fold_left (fun xs x ->
+    xs |> Int64Map.add (x =>* Node.id) x
+  ) Int64Map.empty in
+  
+  cgr =>* nodes |> Array.iter (fun x ->
+   () 
+  ) ;
+
+
+  ()
+
+
+(* There are only really a small handful of things that we need to produce. One is a module. *)
+module Gen = struct
+  type ast =
+    | Module of (string * ast array)
+    | Let of (string * ast)
+    | Union of (string *  ast) array
+end
