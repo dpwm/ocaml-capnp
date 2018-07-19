@@ -694,8 +694,8 @@ let () =
     )
   in
   
-  cgr =>* nodes |> Array.iter (fun node ->
-    if node =>* Node.scopeId = 0L  then
+  cgr =>* requestedFiles |> Array.iter (fun file ->
+    let node = node_map |> Int64Map.find (file =>* RequestedFile.id) in
     show_node node 
   ) ;
 
