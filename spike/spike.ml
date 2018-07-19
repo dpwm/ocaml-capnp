@@ -1,10 +1,30 @@
 open Bigarray
 
-let f = Unix.openfile "dump.bin" [O_RDONLY] 0o640
-
-let a = Unix.map_file f int8_unsigned c_layout false [| -1 |] |> array1_of_genarray
+(* let f = Unix.openfile "dump.bin" [O_RDONLY] 0o640 *)
 
 type data_t = (int, int8_unsigned_elt, c_layout) Array1.t
+
+let from_stdin () =
+  (* A 1MB buffer should be enough for anybody! *) 
+  let max_size = (1 lsl 20) in
+  let a = Array1.create int8_unsigned c_layout max_size in
+  let buffer = Bytes.create 4096 in
+
+  let rec f n = 
+    let r = input stdin buffer 0 4096 in
+    match r with
+    | 0 -> n
+    | r ->
+        for i = 0 to r-1 do
+          a.{n + i} <- Bytes.get buffer i |> Char.code
+        done;
+        f (n + r)
+  in
+
+  f 0 |> ignore;
+  a
+
+
 
 
 let split ns x =
@@ -19,6 +39,7 @@ let sptr = [2; 30; 16; 16]
 let lptr = [2; 30; 3; 29]
 let fptr = [2; 1; 29; 32]
 let cptr = [2; 30; 32]
+
 
 type 'a cursor = {
   pos : int;
@@ -201,7 +222,8 @@ let get : type a. ('b, a) Decl.field -> 'b cursor -> a cursor =
                       done;
                       {c0 with output}
                   | _ -> failwith "not implemented yet" ; ;
-            | _ -> failwith "not implemented yet"
+            | [0; 0; 0; 0] -> {c with output=[| |]}
+            | _ -> failwith "not implemented yet";
 
             end
 
@@ -260,7 +282,11 @@ module Type = struct
   end
 
   module List = struct
+    type t' = t
+    let t' = t
     open Decl type t let t: t structure = structure
+
+    let elementType = t |> field 0 t'
   end
 
   module Enum = struct
@@ -387,6 +413,55 @@ module Enumerant = struct
   let annotations = t |> field 1 Annotation.t
 end
 
+module Field = struct
+  open Decl type t let t : t structure = structure
+
+  let name = t |> field 0 text
+  let codeOrder = t |> field 0 int16
+  let annotations = t |> field 1 @@ list Annotation.t
+
+  module Slot = struct
+    open Decl type t let t : t structure = structure
+    let offset = t |> field 32 uint32
+    let type_ = t |> field 2 Type.t
+    let defaultValue = t |> field 3 Value.t
+  end
+
+  module Group = struct
+    open Decl type t let t : t structure = structure
+  end
+
+  type union = 
+    | Slot of Slot.t struct_data cursor
+    | Group of Group.t struct_data cursor
+
+  let get_union c = 
+    let union_tag = t |> field 64 uint16 in
+    let slot_ = t |> group Slot.t in
+    let group_ = t |> group Group.t in
+    match (c |> get union_tag |> result) with
+    | 0 -> Slot (c |> getGroup slot_)
+    | 1 -> Group (c |> getGroup group_)
+    | _ -> failwith "Invalid tag value"
+
+
+  (*
+    union {  # tag bits [64, 80)
+    slot :group {  # union tag = 0
+      offset @4 :UInt32;  # bits[32, 64)
+      type @5 :Type;  # ptr[2]
+      defaultValue @6 :Value;  # ptr[3]
+      hadExplicitDefault @10 :Bool;  # bits[128, 129)
+    }
+    group :group {  # union tag = 1
+      typeId @7 :UInt64;  # bits[128, 192)
+    }
+  }
+  *)
+ 
+
+end
+
 module Node = struct
   open Decl
 
@@ -419,6 +494,7 @@ module Node = struct
     type t let t : t structure = structure
 
     let name = t |> field 0 text
+    let id = t |> field 0 int64
   end
 
 
@@ -428,15 +504,19 @@ module Node = struct
   let scopeId = t |> field 128 uint64 
   let parameters = t |> field 5 @@ list Parameter.t
   let isGeneric = t |> field 288 bool
-  let nestedNodes = t |> field 1 NestedNode.t
+  let nestedNodes = t |> field 1 @@ list NestedNode.t
   let annotations = t |> field 2 Annotation.t
 
   module Struct = struct
     type t let t : t structure = structure
+
+    let fields = t |> field 3 @@ list Field.t
   end
 
   module Enum = struct
     type t let t : t structure = structure
+
+    let enumerants = t |> field 3 @@ list Enumerant.t
   end
 
   module Interface = struct
@@ -518,7 +598,6 @@ module CodeGeneratorRequest = struct
   let sourceInfo = t |> field 3 @@ list Node.SourceInfo.t
 end
 
-let cgr = make CodeGeneratorRequest.t a
 
 let get_name c =
   let name = c |> get Node.displayName |> result in
@@ -533,17 +612,91 @@ module Infix = struct
 end
 
 
+let rec type_to_string node_map = let open Type in let open Infix in function
+  | Int8 -> "int8"
+  | Int16 -> "int16"
+  | Int32 -> "int32"
+  | Int64 -> "int64"
+  | Uint8 -> "uint8"
+  | Uint16 -> "uint16"
+  | Uint32 -> "uint32"
+  | Uint64 -> "uint64"
+  | Struct s -> (s =>* Type.Struct.typeId |> (fun x -> Int64Map.find x node_map)) =>* Node.displayName
+  | Enum _ -> "enum"
+  | Text -> "text"
+  | Void -> "void"
+  | Bool -> "bool"
+  | Float32 -> "float32"
+  | Float64 -> "float64"
+  | Data -> "data"
+  | List v -> "list " ^ (v => Type.List.elementType |> Type.get_union |> type_to_string node_map)
+  | Interface _ -> "interface"
+  | AnyPointer _ -> "anypointer"
+
+
 let () =
   let open CodeGeneratorRequest in
   let open CapnpVersion in
   let open Infix in
 
-  let node_map = cgr =>* nodes |> Array.fold_left (fun xs x ->
-    xs |> Int64Map.add (x =>* Node.id) x
+  let a = from_stdin () in
+
+  (* let a = Unix.map_file Unix.stdin int8_unsigned c_layout false [| -1 |] |> array1_of_genarray in *)
+  let cgr = make CodeGeneratorRequest.t a in
+
+  let node_map = cgr =>* nodes |> Array.fold_left (fun node_map node ->
+    node_map |> Int64Map.add (node =>* Node.id) node
   ) Int64Map.empty in
+
+  let rec show_node ?(prefix="") node = 
+
+    let displayName = node =>* Node.displayName in
+    let typ = node |> Node.get_union |> function
+      | File -> "file"
+      | Struct _ -> "struct"
+      | Enum _ -> "enum"
+      | Interface _ -> "interface"
+      | Const _ -> "const"
+      | Annotation _ -> "annotation"
+    in
+
+    Printf.printf "%s%s (%s)\n" prefix displayName typ;
+
+    node |> Node.get_union |> function
+      | Struct s -> 
+          s =>* Node.Struct.fields |> Array.iter (fun x ->
+            let typ, offset = x |> Field.get_union |> function
+              | Slot s -> (
+                s => Field.Slot.type_ |> Type.get_union |> type_to_string node_map,
+                s =>* Field.Slot.offset
+              )
+              | _ -> ("GROUP", 0l)
+            in
+            x =>* Field.name |> fun name -> Printf.printf "%s > %s : %s[%lu]\n" prefix name typ offset
+          )
+      | Enum e ->
+          e =>* Node.Enum.enumerants |> Array.iter (fun x ->
+            x =>* Enumerant.name |> Printf.printf "%s - %s\n" prefix
+          )
+      | _ ->
+          ()
+          ; ;
+
+      
+
+    node =>* Node.nestedNodes |> Array.iter (fun x ->
+      let node = node_map |> Int64Map.find_opt (x =>* Node.NestedNode.id) in
+      match node with
+      | Some node -> 
+          let prefix = "  " ^ prefix in
+          show_node ~prefix node
+      | _ -> ()
+    )
+  in
   
-  cgr =>* nodes |> Array.iter (fun x ->
-   () 
+  cgr =>* nodes |> Array.iter (fun node ->
+    if node =>* Node.scopeId = 0L  then
+    show_node node 
   ) ;
 
 
