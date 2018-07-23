@@ -143,6 +143,8 @@ module Field = struct
   let name = t |> field 0 text
   let codeOrder = t |> field 0 int16
   let annotations = t |> field 1 @@ list Annotation.t
+  let discriminantValue = t |> field 16 uint16
+  let noDiscriminant = 65535
 
   module Slot = struct
     open Decl type t let t : t structure = structure
@@ -153,6 +155,8 @@ module Field = struct
 
   module Group = struct
     open Decl type t let t : t structure = structure
+
+    let typeId = t |> field 128 uint64
   end
 
   type union = 
@@ -235,6 +239,8 @@ module Node = struct
     type t let t : t structure = structure
 
     let fields = t |> field 3 @@ list Field.t
+    let discriminantCount = t |> field 240 uint16
+    let discriminantOffset = t |> field 256 uint32
   end
 
   module Enum = struct
@@ -321,14 +327,6 @@ module CodeGeneratorRequest = struct
   let capnpVersion = t |> field 2 CapnpVersion.t
   let sourceInfo = t |> field 3 @@ list Node.SourceInfo.t
 end
-
-
-let get_name c =
-  let open Decl in
-  let name = c |> get Node.displayName |> result in
-  let prefix = c |> get Node.displayNamePrefixLength |> result |> Int32.to_int in
-  String.sub name prefix  (String.length name - prefix)
-
 
 
 

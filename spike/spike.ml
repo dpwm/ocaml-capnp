@@ -86,15 +86,17 @@ let rec type_to_string node_map =
   | List v -> "list " ^ (v => List.elementType |> get_union |> type_to_string node_map)
   | Interface _ -> "interface"
   | AnyPointer _ -> "anypointer"
-
-(* There are only really a small handful of things that we need to produce. One is a module. *)
-module Gen = struct
-  type ast =
-    | Module of (string * ast array)
-    | Let of (string * ast)
-    | Union of (string *  ast) array
-end
     
+let get_name c =
+  let open Decl.Infix in
+  let open Dschema in
+  let name = c =>* Node.displayName in
+  let prefix = c =>* Node.displayNamePrefixLength |> Int32.to_int in
+  String.sub name prefix  (String.length name - prefix)
+
+
+
+
 let () =
   let open Dschema in
   let open CodeGeneratorRequest in
@@ -113,38 +115,17 @@ let () =
   let rec show_node ?(prefix="") node = 
 
     let displayName = node =>* Node.displayName in
-    let typ = node |> Node.get_union |> function
-      | File -> "file"
-      | Struct _ -> "struct"
-      | Enum _ -> "enum"
-      | Interface _ -> "interface"
-      | Const _ -> "const"
-      | Annotation _ -> "annotation"
+    let displayName, typ = node |> Node.get_union |> function
+      | File -> displayName, "file"
+      | Struct _ -> get_name node, "struct"
+      | Enum _ -> get_name node, "enum"
+      | Interface _ -> get_name node, "interface"
+      | Const _ -> get_name node, "const"
+      | Annotation _ -> get_name node, "annotation"
     in
 
     Printf.printf "%s%s (%s)\n" prefix displayName typ;
 
-    node |> Node.get_union |> function
-      | Struct s -> 
-          s =>* Node.Struct.fields |> Array.iter (fun x ->
-            let typ, offset = x |> Field.get_union |> function
-              | Slot s -> (
-                s => Field.Slot.type_ |> Type.get_union |> type_to_string node_map,
-                s =>* Field.Slot.offset
-              )
-              | _ -> ("GROUP", 0l)
-            in
-            x =>* Field.name |> fun name -> Printf.printf "%s > %s : %s[%lu]\n" prefix name typ offset
-          )
-      | Enum e ->
-          e =>* Node.Enum.enumerants |> Array.iter (fun x ->
-            x =>* Enumerant.name |> Printf.printf "%s - %s\n" prefix
-          )
-      | _ ->
-          ()
-          ; ;
-
-      
 
     node =>* Node.nestedNodes |> Array.iter (fun x ->
       let node = node_map |> Int64Map.find_opt (x =>* Node.NestedNode.id) in
@@ -153,14 +134,36 @@ let () =
           let prefix = "  " ^ prefix in
           show_node ~prefix node
       | _ -> ()
-    )
+    );
+
+    (*node |> Node.get_union |> function
+      | Struct s -> 
+          s =>* Node.Struct.fields |> Array.iter (fun x ->
+            let typ, offset = x |> Field.get_union |> function
+              | Slot s -> (
+                s => Field.Slot.type_ |> Type.get_union |> type_to_string node_map,
+                s =>* Field.Slot.offset
+              )
+              | Group g ->
+                  node_map |> Int64Map.find (g =>* Field.Group.typeId) |> get_name, 0l
+            in
+            let jj = if (x =>* Field.discriminantValue) = 0 then ">" else "*" in
+            Printf.printf "%s %s %s : %s[%lu]\n" prefix jj (x =>* Field.name) typ offset
+          )
+      | Enum e ->
+          e =>* Node.Enum.enumerants |> Array.iter (fun x ->
+            x =>* Enumerant.name |> Printf.printf "%s - %s\n" prefix
+          )
+      | _ ->
+          ()
+          ; ;
+          *)
   in
-  
-  cgr =>* requestedFiles |> Array.iter (fun file ->
+
+  cgr =>* requestedFiles |> Array.map (fun file ->
     let node = node_map |> Int64Map.find (file =>* RequestedFile.id) in
-    show_node node 
+    Gen.(process_node node_map node |> show (empty_lines, empty_lines) |> print_lines)
   ) ;
 
 
   ()
-
