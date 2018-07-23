@@ -36,9 +36,9 @@ module Declarative = struct
     | Float64 : float g
     | Float32 : float g
 
-    | Struct : 'a s c g
+    | Struct : 'a s g
     | Union : ('b s c c -> 'a) * ('b s c c -> 'a -> unit) -> 'a g
-    | List : 'a g -> 'a c array g
+    | List : 'a g -> 'a array g
     | Ptr : 'a g -> 'a c g
     | Text : string g
     | Data : string g
@@ -162,9 +162,9 @@ module Declarative = struct
 
   end
 
-  type 'a sg = 'a s c g
-  type 'a sgu = 'a s c c
-  type 'a ug = 'a s c g
+  type 'a sg = 'a s g
+  type 'a sgu = 'a s c
+  type 'a ug = 'a s g
 
   let sg = Struct 
   let ug f g = Union (f, g)
@@ -191,55 +191,49 @@ module Declarative = struct
     | Some default -> f default x
     | None -> x
 
+  let mapSome f x = match x with | Some x -> Some (f x) | None -> None
 
-  let rec get : type a s. (s, a) field -> s c -> a c =
+
+  let rec get : type a s. (s, a) field -> s c -> a =
     let open Stream in
     fun field c ->
       match field with
       | Field (b8, b, t, default) ->
         (match t with
         | UInt64 -> 
-            c |> read_int64 |> popr |>
-            map (mapDefault default Int64.logxor)
+            c |> read_int64 |> pop |> mapDefault default Int64.logxor
 
         | Int64  ->
-            c |> read_int64 |> popr |>
-            map (mapDefault default Int64.logxor)
+            c |> read_int64 |> pop |> mapDefault default Int64.logxor
 
         | Int32  -> 
-            c |> read_int32 |> popr |> 
-            map (mapDefault default Int32.logxor)
+            c |> read_int32 |> pop |> mapDefault default Int32.logxor
 
         | UInt32 -> 
-            c |> read_int32 |> popr |> 
-            map (mapDefault default Int32.logxor)
+            c |> read_int32 |> pop |> mapDefault default Int32.logxor
 
         | UInt16 -> 
-            c |> read_int16 |> popr |> 
-            map (mapDefault default (lxor))
+            c |> read_int16 |> pop |> mapDefault default (lxor)
 
         | Int16  -> 
-            c |> read_int16 |> popr |> 
-            map (unsigned_to_signed 16) |>
-            map (mapDefault default (lxor))
+            c |> read_int16 |> pop |> 
+            unsigned_to_signed 16 |>
+            mapDefault default (lxor)
 
         | UInt8  -> 
-            c |> read_int8 |> popr |> 
-            map (mapDefault default (lxor))
+            c |> read_int8 |> pop |> mapDefault default (lxor)
 
         | Int8   -> 
-            c |> read_int8 |> popr |>
-            map (unsigned_to_signed 8) |>
-            map (mapDefault default (lxor))
+            c |> read_int8 |> pop |> unsigned_to_signed 8 |> mapDefault default (lxor)
 
-        | Float32 -> c |> read_int32 |> popr |> map Int32.float_of_bits
-        | Float64 -> c |> read_int64 |> popr |> map Int64.float_of_bits
+        | Float32 -> c |> read_int32 |> pop |> mapDefault (mapSome Int32.bits_of_float default) (Int32.logxor) |> Int32.float_of_bits
+        | Float64 -> c |> read_int64 |> pop |> mapDefault (mapSome Int64.bits_of_float default) (Int64.logxor) |> Int64.float_of_bits
 
-        | Void -> c |> setval ()
-        | Bool -> c |> setval true
-        | Text -> {c with result=""}
-        | Data -> {c with result=""}
-        | List _ -> {c with result=[||]}
+        | Void -> ()
+        | Bool -> true
+        | Text -> ""
+        | Data -> ""
+        | List _ -> [||]
         | Ptr t -> 
             let default = match default with
             | None -> None
@@ -255,7 +249,7 @@ module Declarative = struct
 
       | Group (t, default) -> match t with
         | Struct -> 
-            {c with result={c with result=Structured}}
+            Structured
 
         | Ptr t -> 
             let default = match default with
@@ -277,7 +271,7 @@ module Declarative = struct
   let ptr : type a. a g -> a c g = fun t -> Ptr t
 
   let (=>) c x =
-    (get x c).result
+    (get x c)
 
   let (>>) c x =
     (c, x)
@@ -304,8 +298,8 @@ module Utils = struct
           f (n + r)
     in
 
-    f 0 |> ignore;
-    a
+    let n = f 0 in
+    Array1.sub a 0 n
 
   open Declarative 
   let cursor data = 
@@ -317,7 +311,7 @@ module Utils = struct
       cursor data |> 
       read_header |>
       read_ptr |>
-      get (Group (t, None))
+      get (Group (ptr t, None))
 
 end
 

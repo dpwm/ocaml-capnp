@@ -13,6 +13,6 @@ let () =
   But if an allocator is provided, we will have:
     (allocator, segments, struct)
     *)
-  c => CodeGeneratorRequest.nodes ;
+  ((c => CodeGeneratorRequest.nodes).(0) => Node.nestedNodes).(0) => Node.NestedNode.id;
   
   ()
