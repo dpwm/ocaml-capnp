@@ -15,6 +15,9 @@ module Type = struct
 
   module Enum = struct
     open Decl type t let t: t structure = structure
+
+    let typeId = t |> field 64 uint64
+    let brand = t |> field 0 Brand.t
   end
 
   module Interface = struct
@@ -241,6 +244,8 @@ module Node = struct
     let fields = t |> field 3 @@ list Field.t
     let discriminantCount = t |> field 240 uint16
     let discriminantOffset = t |> field 256 uint32
+    let pointerCount = t |> field 192 UInt16 
+    let dataWordCount = t |> field 112 UInt16 
   end
 
   module Enum = struct

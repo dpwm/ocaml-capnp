@@ -7,12 +7,17 @@ let () =
 
   let bs = Utils.from_stdin () in
 
+  let fmt = Printf.sprintf in
+
   let c = bs |> Utils.decode CodeGeneratorRequest.t in
-  (* We will always have the stack structure: 
-    (segments, segments, struct) 
-  But if an allocator is provided, we will have:
-    (allocator, segments, struct)
-    *)
-  ((c => CodeGeneratorRequest.nodes).(0) => Node.nestedNodes).(0) => Node.NestedNode.id;
+
+  let new_ = 2 in
+  (c => CodeGeneratorRequest.nodes) |> Array.iter (
+    fun node -> node => Node.union |> function
+      | File -> "FILE!"
+      | Struct s -> (s => Node.Struct.fields |> Array.map (get Field.name) |> Array.to_list |> String.concat "; " |> fmt "Struct (%s)")
+      | _ -> "_" ;
+      |> print_endline
+  );
   
   ()
