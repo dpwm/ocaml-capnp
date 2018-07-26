@@ -70,6 +70,7 @@ module Declarative = struct
 
   type 'a s = Structured
   type 'a u = Unioned
+  type 'a i = Interfaced
 
   type 'a bounds = 'a * 'a
 
@@ -88,6 +89,7 @@ module Declarative = struct
     | StructPtr of struct_ptr
     | ListPtr of list_ptr
     | CompositeListPtr of list_ptr * struct_ptr
+    | CapabilityPtr of int
 
   type 'a c = {
     stream : (data, 'a) Stream.t;
@@ -117,21 +119,38 @@ module Declarative = struct
     | Ptr : 'a g -> 'a c g
     | Text : string g
     | Data : string g
-    | Interface : unit g
+    | Interface : 'a i g
+    | Method : 'a g * 'b g -> ('a -> 'b) g
   and stored = Stored : 'a g -> stored
 
+  module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
+
+  type 'a builder = Builder of 'a * stored IntMap.t
 
   type 'a sg = 'a s g
+  type 'a ig = 'a i g
   type 'a sgu = 'a s c
   type 'a ug = 'a s g
 
+
+  let builder : type a. a g -> a builder = function
+    | Ptr (Struct (dwords, pwords)) -> 
+        let open Stream in
+        let data = Array1.create int8_unsigned c_layout (1 + dwords + pwords) in
+        let stream = {data; pos=0; result=Structured} in
+        Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, IntMap.empty)
+
+
+
   let sg dsize psize = Struct (dsize, psize)
+  let ig = Interface
 
   type ('s, 'a) field = 
     | Field of (int * int * 'a g * 'a option)
     | Group of ('a g * 'a option)
 
   let ug f g = Group (Union (f, g), None)
+
 
   let field : type st t. st g -> t g -> ?default:t -> Int32.t -> (st, t) field =
     fun st t ?default offset ->
@@ -216,7 +235,8 @@ module Declarative = struct
                else
                  failwith "Landing pad is two words"
       
-      | 3 -> failwith "not implemented"
+      | 3 -> s |> read_int64 |> read_bits64u 2 30 |> read_bits64u 32 32 |> pop1 |> snd |> pop2 |> fst |> function | (0,n) -> s |> push (s.pos, CapabilityPtr n)
+
     in
     c.stream |> read_ptr |> pop1 |> fun ((_, ptr), stream) -> {c with ptr; stream}
     
