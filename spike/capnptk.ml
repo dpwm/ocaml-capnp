@@ -3,21 +3,24 @@ module Stream = struct
   type ('data, 'a) t = { data : 'data; pos : int;  result : 'a }
   (* A very simple (read dangerous) stack based bytestream reader / writer *)
   let pop {result=(a, _)} = a
-  let popr c = {c with result=(fst c.result)}
+  let popr c = {c with result=(snd c.result)}
 
   let map f c = {c with result = f c.result}
 
+  let round_up d n = (((n - 1) / d) + 1) * d
 
   let mov d ({pos} as c) = {c with pos = d + pos}
   let movw d = mov (8 * d)
-  let align d c = {c with pos = ((((c.pos - 1) / d) + 1) * d)}
+  let align d c = {c with pos = round_up d c.pos}
   let push v c = {c with result = (v, c.result)}
   let pop1 ({result = (a, result)} as c) = a, {c with result}
   let pop2 ({result = (b, (a, result))} as c) = (a, b), {c with result}
   let pop3 ({result = (c, (b, (a, result)))} as z) = (a, b, c), {z with result}
+  let pop4 ({result = (d, (c, (b, (a, result))))} as z) = (a, b, c, d), {z with result}
   let map1 f c = c |> pop1 |> (fun (a, c) -> c |> push (f a))
   let map2 f c = c |> pop2 |> (fun (a, c) -> c |> push (f a))
   let map3 f c = c |> pop3 |> (fun (a, c) -> c |> push (f a))
+  let map4 f c = c |> pop4 |> (fun (a, c) -> c |> push (f a))
   let setval result c = {c with result}
   let id x = x
 
@@ -35,17 +38,44 @@ module Stream = struct
 
 
   let read_int8 c = c |> push c.data.{c.pos} |> mov 1
-  let read_int16 c = c |> read_int8 |> read_int8 |> map2 (fun (a, b) -> a + (b lsl 8))
-  let read_int32 c = c |> read_int16 |> read_int16 |> map2 (fun (a, b) -> Int32.(add (of_int a) (shift_left (of_int b) 16)))
-  let read_int64 c = c |> read_int32 |> read_int32 |> map2 (fun (a, b) -> Int64.(add (of_int32 a) (shift_left (of_int32 b) 32)))
+  let read_int16 c = c |> read_int8 |> read_int8 |> map2 (fun (a, b) -> a lor (b lsl 8))
+  let read_int32 c = c |> read_int16 |> read_int16 |> map2 (fun (a, b) -> Int32.(logor (of_int a) (shift_left (of_int b) 16)))
+  let read_int64 c = c |> read_int16 |> read_int16 |> read_int16 |> read_int16 |> map4 (fun (a, b, c, d) -> Int64.(
+    logor (logor (of_int a) (shift_left (of_int b) 16)) (logor (shift_left (of_int c) 32) (shift_left (of_int d) 48) )
+    ))
+
+  let write_int8 c = c |> pop1 |> fun (x, c) -> c.data.{c.pos} <- x; c |> mov 1
+  let write_int16 c = c |> pop1 |> fun (x, c) -> c |> push (x land 0xff) |> write_int8 |> push ((x lsr 8) land 255) |> write_int8
+  let write_int32 c = c |> pop1 |> fun (x, c) -> 
+    c |> 
+    push Int32.(logand x 0xffffl |> to_int) |> write_int16  |>
+    push Int32.(shift_right_logical x 16 |> to_int) |> write_int16 
+
+  let write_int64 c = c |> pop1 |> fun (x, c) -> 
+    c |> 
+    push Int64.(logand x 0xffffffffL |> to_int32) |> write_int32 |>
+    push Int64.(shift_right_logical x 32 |> to_int32) |> write_int32
+
+  let write_string c = c |> pop1 |> fun (x, c) ->
+    for i = 0 to (String.length x) - 1 do
+      c.data.{c.pos + i} <- Char.code x.[i]
+    done;
+    c |> mov (String.length x)
 
   let withMap read f c = c |> read |> map1 f
 
-
+  let write_bits64u a b c =
+    let v, c = pop1 c in
+    let x, c = pop1 c in
+    c |> push Int64.(
+      x |> of_int |> logand (sub (shift_left 1L b) 1L) |> fun x -> shift_left x a |> logor v
+    )
 
   let read_bits64u a b c =
     let v, c = pop1 c in
-    c |> push Int64.(logand (shift_right_logical v a) (sub (shift_left 1L b) 1L) |> to_int) |> push v
+    c |> push Int64.(
+      logand (shift_right_logical v a) (sub (shift_left 1L b) 1L) |> to_int
+      ) |> push v
 
   let unsigned_to_signed n x =
     let d = 1 lsl n in
@@ -54,11 +84,6 @@ module Stream = struct
 
   let read_bits64s a b c =
     c |> read_bits64u a b |> pop2 |> fun ((x, y), c) -> c |> push (unsigned_to_signed b x) |> push y
-    
-
-
-
-
 
 end
 module Declarative = struct
@@ -121,43 +146,192 @@ module Declarative = struct
     | Data : string g
     | Interface : 'a i g
     | Method : 'a g * 'b g -> ('a -> 'b) g
-  and stored = Stored : 'a g -> stored
+  and stored = Stored : ('a g * 'a) -> stored
 
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
 
-  type 'a builder = Builder of 'a * stored IntMap.t
+  type 'a builder = Builder of 'a * stored array
 
   type 'a sg = 'a s g
   type 'a ig = 'a i g
   type 'a sgu = 'a s c
   type 'a ug = 'a s g
 
-
-  let builder : type a. a g -> a builder = function
-    | Ptr (Struct (dwords, pwords)) -> 
-        let open Stream in
-        let data = Array1.create int8_unsigned c_layout (1 + dwords + pwords) in
-        let stream = {data; pos=0; result=Structured} in
-        Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, IntMap.empty)
-
-
-
   let sg dsize psize = Struct (dsize, psize)
   let ig = Interface
 
   type ('s, 'a) field = 
     | Field of (int * int * 'a g * 'a option)
+    | PtrField of (int * 'a g * 'a option)
     | Group of ('a g * 'a option)
 
-  let ug f g = Group (Union (f, g), None)
+  open Stream
+  let ensure_struct_ptr c = match c.ptr with
+    | StructPtr x -> x
+    | _ -> failwith "Expected struct pointer"
 
+  let ensure_compositelist_ptr c = match c.ptr with
+    | CompositeListPtr (x,y) -> (x,y)
+    | _ -> failwith "Expected composite list pointer"
+
+  let ensure_list_ptr c = match c.ptr with
+    | ListPtr x -> x
+    | _ -> failwith "Expected list pointer"
+
+  let cmap f c = {c with stream = f c.stream}
+
+  let mov_field field c =
+    let {pwords; dwords} = ensure_struct_ptr c in
+    match field with
+    | PtrField (n, t, d) when n >= pwords -> 
+        failwith "Pointer out of range"
+    | PtrField (n, t, d) ->
+        c |> cmap (movw (n + dwords)) |> cmap (push (n, t, d))
+    | Field (b8, _, _, _) when b8 >= (dwords * 8) -> 
+        failwith "Field out of range"
+    | Field (b8, n, t, d) ->
+        c |> cmap (mov b8) |> cmap (push (n, t, d))
+    | Group (t, d) -> c |> cmap (push (0, t, d))
+
+
+  let pbuilder : type a. a g -> a builder = function
+    | Ptr Struct (dwords, pwords) -> 
+        let open Stream in
+        let data = Array1.create int8_unsigned c_layout ((dwords + pwords) * 8) in
+        let stream = {data; pos=0; result=Structured} in
+        let ptrs = Array.create pwords (Stored (Void, ())) in
+        Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, ptrs)
+
+  let openbuilder t = (Ptr t) |> pbuilder
+
+  let write_list_ptr offset typ nelem s =
+    s |> 
+    push 1 |> 
+    push offset |> 
+    push typ |> 
+    push nelem |> 
+    push 0L |> 
+    write_bits64u 35 29 |> 
+    write_bits64u 32 3 |> 
+    write_bits64u 2 30 |> 
+    write_bits64u 0 2 |> 
+    write_int64
+
+
+  let write_struct_ptr offset dwords pwords s = 
+    s |> 
+    push pwords |> 
+    push dwords |> 
+    push offset |> 
+    push 0L |>
+    write_bits64u 2 30 |> 
+    write_bits64u 32 16 |> 
+    write_bits64u 48 16 |>
+    write_int64
+
+  type 'a stream = Stream of 'a c
+  let stream_data (Stream c) = c.stream.data
+
+  let msg : 'a c -> 'a stream = fun s ->
+    let open Array1 in
+    let nwords = (dim s.stream.data) / 8 in
+
+    let data = create int8_unsigned c_layout (8 * (nwords + 2)) in
+    let olddata = s.stream.data in
+    let s = {s with stream = {s.stream with data; pos=0}} in
+    let {pwords; dwords} = s |> ensure_struct_ptr in
+    blit olddata (sub data 16 (nwords * 8));
+    let s = s |> cmap (fun s -> s |> push 0l |> write_int32 |> push (Int32.of_int (nwords + 1)) |> write_int32 |> write_struct_ptr 0 dwords pwords) in
+    Stream s
+      
+
+  let closebuilder : type a. a c builder -> a c = fun x ->
+    (* Simply, we allocate a pool of memory of requisite size (we know this because builders track size) *)
+    let Builder (s, v) = x in
+    (* We first calculate the requisite size *)
+    let n = v |> (0 |> Array.fold_left (fun n x -> 
+      let Stored x = x in
+      match x with
+      | (List (Ptr _)), v ->
+          (v |> (n + 8 |> Array.fold_left (fun n x -> n + (x.stream.data |> Array1.dim))))
+      | Ptr _, v -> n + (v.stream.data |> Array1.dim)
+      | List _, _ -> failwith "Lists not implemented yet"
+      | Text, v -> n + (v |> String.length |> ((+) 1) |> round_up 8)
+      | Data, _ -> failwith "Data not implemented yet"
+      | Struct _, _ -> failwith "struct not implemnented yet"
+      | Void, _ -> n
+      | _ -> failwith "Not implemented yet!"
+    )) in
+
+    let open Bigarray in
+    let m = (s.stream.data |> Array1.dim) in
+    let data = Array1.create int8_unsigned c_layout (n + m) in
+
+    Array1.(blit s.stream.data (sub data 0 m));
+
+    let s = {s with stream={s.stream with data}} in
+    let s_alloc = {s with stream={s.stream with pos=m}} in
+    let s0 = {s with stream={s.stream with pos=0}} in
+
+    v |> ((s_alloc, 0) |> Array.fold_left (fun (s, n) x -> 
+      let Stored (t,v) = x in
+
+      let s' = s0 |> mov_field (PtrField (n, t, None)) in
+      let offset = (s.stream.pos - s'.stream.pos - 8) / 8 in
+
+      (match t with
+        | List Ptr (Struct (dwords, pwords)) ->
+            let pos = s.stream.pos in
+            (* We want to write the object type *)
+            let nelem = Array.length v in
+
+            let wcount = (dwords + pwords) * nelem in
+
+            s' |> cmap (fun s -> s |> popr |> write_list_ptr offset 7 wcount) |> ignore;
+
+            let s = s |> cmap (fun s -> s |> write_struct_ptr nelem dwords pwords) in
+
+            v |> (s |> Array.fold_left (fun s x -> 
+              let open Array1 in
+              let d2_len = dim x.stream.data in
+              let d2_data = sub x.stream.data 0 d2_len in
+              let d1_data = sub s.stream.data s.stream.pos (dim d2_data) in
+              blit d2_data d1_data;
+              s |> cmap (d2_data |> dim |> mov);
+            ))
+
+
+
+        | Ptr Struct (dwords, pwords) ->
+            s' |> cmap (fun s -> s |> write_struct_ptr offset dwords pwords);
+            let open Array1 in
+            let d2_len = dim v.stream.data in
+            let d2_data = sub v.stream.data 0 d2_len in
+            let d1_data = sub s.stream.data s.stream.pos d2_len in
+            blit d2_data d1_data;
+            s |> cmap (d2_data |> dim |> mov);
+
+        | Ptr Void -> s
+        | Void -> s
+
+        | Text ->
+            s' |> cmap (fun s -> s |> write_list_ptr offset 2 (1 + String.length v));
+            let s = s |> (cmap (fun s -> s |> push v |> write_string |> mov 1 |> align 8)) in
+            s
+
+      ), (n + 1)
+    )) |> fst
+
+  let build f t = t |> openbuilder |> f |> closebuilder
+
+
+  let ug f g = Group (Union (f, g), None)
 
   let field : type st t. st g -> t g -> ?default:t -> Int32.t -> (st, t) field =
     fun st t ?default offset ->
       let ptrfield = 
-        let b8 = Int32.(to_int offset) in
-        let b = 0 in
-        Field (b8, b, t, default)
+        let b = Int32.(to_int offset) in
+        PtrField (b, t, default)
       in
       match t with 
       | Ptr _  -> ptrfield
@@ -165,12 +339,12 @@ module Declarative = struct
       | Text  -> ptrfield
       | Data -> ptrfield
 
-
       | _ -> 
         let b8 = Int32.(shift_right_logical offset 3) in
         let b = Int32.(sub offset (shift_left b8 3) |> to_int) in
         let b8 = Int32.to_int b8 in
         Field (b8, b, t, default)
+
 
   let group : type st t. ?default:t -> st g -> t g -> (st, t) field =
     fun ?default st t ->
@@ -216,7 +390,6 @@ module Declarative = struct
           c |> movw offset |> push (ListPtr {typ; nelem})
     )
 
-
   let c_read_ptr c =
     let sections = c.sections in
     let rec read_ptr s = 
@@ -240,46 +413,38 @@ module Declarative = struct
     in
     c.stream |> read_ptr |> pop1 |> fun ((_, ptr), stream) -> {c with ptr; stream}
     
-  let ensure_struct_ptr c = match c.ptr with
-    | StructPtr x -> x
-    | _ -> failwith "Expected struct pointer"
 
-  let ensure_compositelist_ptr c = match c.ptr with
-    | CompositeListPtr (x,y) -> (x,y)
-    | _ -> failwith "Expected composite list pointer"
+  let set : type a s.  (s, a) field -> a -> s c builder -> s c builder = 
+    fun field v ber ->
+      let Builder (c, ptrs) = ber in
+      let c0 = c in
+      let c = c |> mov_field field in
+      let (n, t, d), stream = c.stream |> pop1 in
 
-  let ensure_list_ptr c = match c.ptr with
-    | ListPtr x -> x
-    | _ -> failwith "Expected list pointer"
+      (match t with
+      | UInt64 -> stream |> push v |> write_int64
+      | Int64 -> stream |> push v |> write_int64
+      | UInt32 -> stream |> push v |> write_int32
+      | Int32 -> stream |> push v |> write_int32
+      | UInt16 -> stream |> push v |> write_int16
+      | Int16 -> stream |> push v |> write_int16
+      | UInt8 -> stream |> push v |> write_int8
+      | Int8 -> stream |> push v |> write_int8
+      | List _ -> ptrs.(n) <- Stored (t, v); stream
+      | Ptr _ -> ptrs.(n) <- Stored (t, v); stream
+      | Text -> ptrs.(n) <- Stored (t, v); stream
+      | _ -> failwith "This is not an offset field"
+      );
 
-  let cmap f c = {c with stream = f c.stream}
-  let mov_field : type a. a g -> int -> 'b c -> 'b c = fun t b8 c  ->
-    let {pwords; dwords} = ensure_struct_ptr c in
-    let p () =
-      if b8 >= pwords then failwith "Pointer out of bounds";
-      cmap (movw (b8 + dwords)) c
-    in
-    match t with
-    | Ptr _ -> p ()
-    | List _ ->  p ()
-    | Text ->  p ()
-    | Data -> p ()
-    | _ -> 
-        if b8 >= (dwords * 8) then failwith (Printf.sprintf "Data out of bounds");
-        cmap (mov b8) c
-
-
+      ber
 
   let get : type a s. (s, a) field -> s c -> a =
     let open Stream in
     fun field c ->
-      match field with
-      | Field (b8, b, t, default) ->
-        (* We also must make sure that we are in a struct pointer *)
+      let c = c |> mov_field field in
+      let (b, t, default), stream = c.stream |> pop1 in
 
-        let c = c |> mov_field t b8 in
-        let stream = c.stream in
-        (match t with
+      match t with
         | UInt64 -> 
             stream |> read_int64 |> pop |> mapDefault default Int64.logxor
 
@@ -308,14 +473,12 @@ module Declarative = struct
 
         | Float32 -> stream |> read_int32 |> pop |> mapDefault (mapSome Int32.bits_of_float default) (Int32.logxor) |> Int32.float_of_bits
         | Float64 -> stream |> read_int64 |> pop |> mapDefault (mapSome Int64.bits_of_float default) (Int64.logxor) |> Int64.float_of_bits
-
         | Void -> ()
         | Bool -> true
         | Data -> ""
         | List Ptr (Struct _)-> 
             let c = c |> c_read_ptr in
             let lptr, sptr = c |> ensure_compositelist_ptr in
-            Printf.printf "%d %d %d\n" sptr.dwords sptr.pwords lptr.nelem;
             let elem0 = {c with ptr=StructPtr sptr} |> cmap (setval Structured) in
             let swords = sptr.pwords + sptr.dwords in
             let out = Array.make lptr.nelem elem0 in
@@ -323,7 +486,6 @@ module Declarative = struct
               out.(i) <- elem0 |> cmap (movw (i * swords));
             ) out;
             out
-
         | Text -> 
             let c = c |> c_read_ptr in
             let v = c |> ensure_list_ptr in
@@ -346,12 +508,7 @@ module Declarative = struct
 
         | Struct _ ->
             failwith "struct"
-        | _ ->
-            failwith "other"
 
-        )
-
-      | Group (t, default) -> match t with
         | Struct _ -> 
             Structured
 
@@ -368,15 +525,8 @@ module Declarative = struct
             f (c |> cmap (setval Structured))
 
 
-        | _ -> failwith "A group can only result in a struct or pointer"
-
 
       
-
-  let rec set : type a s. (s c * (s, a) field) -> a -> unit =
-    fun v n ->
-      ()
-
 
   let ptr : type a. a g -> a c g = fun t -> Ptr t
 
@@ -425,8 +575,16 @@ module Utils = struct
       pop1 |> fun (sections, stream) -> 
         let pos = ref (stream.pos / 8) in
         let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
-        Array.iter (fun x -> Printf.printf ":%d\n" x) sections;
         {stream; ptr=NullPtr; sections} |> c_read_ptr |> get (Group (ptr t, None))
+
+    let to_string x = 
+      let open Bigarray in
+      let n = Array1.dim x in
+      let b = Bytes.create n in
+      for i = 0 to n-1 do
+        b.[i] <- Char.chr x.{i}
+      done;
+      Bytes.unsafe_to_string b
 
 end
 

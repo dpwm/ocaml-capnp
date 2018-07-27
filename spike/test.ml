@@ -2,22 +2,31 @@
 
 let () =
   let open Capnptk in
-  let open Schema in
+  let open Myschema in
   let open Capnptk.Declarative in
+  let open Bigarray in 
 
-  let bs = Utils.from_stdin () in
+  (* let bs = Utils.from_stdin () in *)
 
   let fmt = Printf.sprintf in
 
-  let c = bs |> Utils.decode CodeGeneratorRequest.t in
+  let test_person = Person.(
+    t |> build (fun x -> 
+    x |> 
+    set name "Test Person" |>
+    set dob Date.(t |> build (fun x -> 
+      x |> set year 2000 |> set month 1 |> set day 1)
+    ) |>
+    set friends [| t |> build (fun x -> 
+      x |> 
+      set name "Test Friend" |>
+      set dob Date.(t |> build (fun x -> x |> set year 1999 |> set month 1 |> set day 1))) |]
 
-  let new_ = 2 in
-  (c => CodeGeneratorRequest.nodes) |> Array.iter (
-    fun node -> node => Node.union |> function
-      | File -> "FILE!"
-      | Struct s -> (s => Node.Struct.fields |> Array.map (get Field.name) |> Array.to_list |> String.concat "; " |> fmt "Struct (%s)")
-      | _ -> "_" ;
-      |> print_endline
-  );
+  )) |> msg |> stream_data;
+  in
+
   
+  Utils.to_string test_person |> Printf.printf "%s";
+  (* Person.(test_person => name) |> print_endline; *)
+
   ()
