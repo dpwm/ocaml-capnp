@@ -327,7 +327,7 @@ let rec process_node node_map node =
             | Some n, Slot (offset, typ, _) -> 
               add_line (f "| %s x -> b |> set union_tag %d |> set (field t %s %lul) x" name n typ offset)
           ) bodylines) |>
-          unindent |> add_line "in Union(f, g)" |> unindent
+          unindent |> add_line "in ug f g" |> unindent
 
           
         end

@@ -144,9 +144,9 @@ module Declarative = struct
     | Ptr : 'a g -> 'a c g
     | Text : string g
     | Data : string g
-    | Interface : 'a i g
-    | Method : 'a g * 'b g -> ('a -> 'b) g
+    | Interface : (stored_interface array ref * Int64.t) -> 'a i g
   and stored = Stored : ('a g * 'a) -> stored
+  and stored_interface = StoredInterface : 'a i g -> stored_interface
   and 'a builder = Builder of 'a * stored array
 
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
@@ -158,7 +158,18 @@ module Declarative = struct
   type 'a ug = 'a s g
 
   let sg dsize psize = Struct (dsize, psize)
-  let ig = Interface
+  let ig id = Interface (ref [||], id)
+
+  type ('i, 'a, 'b) method_t = {
+    method_id: int;
+    iface: 'i g; (* We need to know what the interface id is when we generate calls *)
+    request: 'a g;
+    response: 'b g;
+  }
+
+  let call : type a b. ('i g, a g, b g) method_t -> a -> _ -> b =
+    fun iface a conn ->
+      failwith "connection failure"
 
   type ('s, 'a) field = 
     | Field of (int * int * 'a g * 'a option)
@@ -194,14 +205,14 @@ module Declarative = struct
     | Group (t, d) -> c |> cmap (push (0, t, d))
 
 
-  let pbuilder : type a. a g -> a builder = function
+  let pbuilder : type a. a s c g -> a s c builder = function
     | Ptr Struct (dwords, pwords) -> 
         let open Stream in
         let data = Array1.create int8_unsigned c_layout ((dwords + pwords) * 8) in
         let stream = {data; pos=0; result=Structured} in
-        let ptrs = Array.create pwords (Stored (Void, ())) in
+        let ptrs = Array.make pwords (Stored (Void, ())) in
         Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, ptrs)
-
+    | _ -> failwith "Builder must be given a struct."
   let openbuilder t = (Ptr t) |> pbuilder
 
   let write_list_ptr offset typ nelem s =
@@ -244,7 +255,6 @@ module Declarative = struct
     let s = s |> cmap (fun s -> s |> push 0l |> write_int32 |> push (Int32.of_int (nwords + 1)) |> write_int32 |> write_struct_ptr 0 dwords pwords) in
     Stream s
       
-
   let closebuilder : type a. a c builder -> a c = fun x ->
     (* Simply, we allocate a pool of memory of requisite size (we know this because builders track size) *)
     let Builder (s, v) = x in
@@ -281,7 +291,6 @@ module Declarative = struct
 
       (match t with
         | List Ptr (Struct (dwords, pwords)) ->
-            let pos = s.stream.pos in
             (* We want to write the object type *)
             let nelem = Array.length v in
 
@@ -303,7 +312,7 @@ module Declarative = struct
 
 
         | Ptr Struct (dwords, pwords) ->
-            s' |> cmap (fun s -> s |> write_struct_ptr offset dwords pwords);
+            s' |> cmap (fun s -> s |> write_struct_ptr offset dwords pwords) |> ignore;
             let open Array1 in
             let d2_len = dim v.stream.data in
             let d2_data = sub v.stream.data 0 d2_len in
@@ -315,9 +324,10 @@ module Declarative = struct
         | Void -> s
 
         | Text ->
-            s' |> cmap (fun s -> s |> write_list_ptr offset 2 (1 + String.length v));
+            s' |> cmap (fun s -> s |> write_list_ptr offset 2 (1 + String.length v)) |> ignore;
             let s = s |> (cmap (fun s -> s |> push v |> write_string |> mov 1 |> align 8)) in
             s
+        | _ -> failwith "match failure."
 
       ), (n + 1)
     )) |> fst
@@ -397,7 +407,6 @@ module Declarative = struct
 
       | 0 -> s |> unsafe_read_struct |> pop1 |> fun ((offset, dwords, pwords), s) -> 
           s |> movw offset |> fun s -> s |> push @@ (s.pos, StructPtr {dwords; pwords})
-
       | 1 -> s |> unsafe_read_list |> pop1 |> fun (x, s) -> s |> push (s.pos, x)
       | 2 -> s |> read_int64 |> read_bits64u 2 1 |> read_bits64u 3 29 |>
              read_bits64u 32 32  |> pop1 |> snd |> pop3 |> fun ((pad, offset, segment), s) ->
@@ -408,7 +417,10 @@ module Declarative = struct
                else
                  failwith "Landing pad is two words"
       
-      | 3 -> s |> read_int64 |> read_bits64u 2 30 |> read_bits64u 32 32 |> pop1 |> snd |> pop2 |> fst |> function | (0,n) -> s |> push (s.pos, CapabilityPtr n)
+      
+      | 3 -> s |> read_int64 |> read_bits64u 2 30 |> read_bits64u 32 32 |> pop1 |> snd |> pop2 |> fst |> (
+        function | (0,n) -> s |> push (s.pos, CapabilityPtr n) | _ -> failwith "match failure")
+      | _ -> failwith "Impossible pointer type"
 
     in
     c.stream |> read_ptr |> pop1 |> fun ((_, ptr), stream) -> {c with ptr; stream}
@@ -431,11 +443,14 @@ module Declarative = struct
       | UInt8 -> stream |> push v |> write_int8
       | Int8 -> stream |> push v |> write_int8
       | List _ -> ptrs.(n) <- Stored (t, v); stream
-      | Ptr _ -> ptrs.(n) <- Stored (t, v); stream
+      | Ptr _ ->
+          begin match field with
+          | Group _ -> Array1.blit v.stream.data c.stream.data; stream
+          | _ -> ptrs.(n) <- Stored (t, v); stream end
       | Text -> ptrs.(n) <- Stored (t, v); stream
-      | Union (_, g) -> g (Builder (c0 |> cmap (setval Structured), ptrs)) v; stream
+      | Union (_, g) -> g (Builder (c0 |> cmap (setval Structured), ptrs)) v |> ignore; stream
       | _ -> failwith "This is not an offset field"
-      );
+      ) |> ignore;
 
       ber
 
@@ -499,32 +514,18 @@ module Declarative = struct
 
 
         | Ptr (Struct _) -> 
-            let default = match default with
-            | None -> None
-            | Some result -> failwith "Default values for pointer types are not implemented"
-            in
             let c = c |> c_read_ptr |> cmap (setval Structured) in
-            c |> ensure_struct_ptr;
+            c |> ensure_struct_ptr |> ignore;
             c
-
-        | Struct _ ->
-            failwith "struct"
 
         | Struct _ -> 
             Structured
 
-        | Ptr (Struct _) -> 
-            let default = match default with
-            | None -> None
-            | Some result -> failwith "Default values for pointer types are not implemented"
-            in
-            (match c.ptr with
-            | StructPtr _ -> {c with stream = c.stream |> setval Structured}
-            | _ -> failwith "Expected Struct Pointer, got something else")
 
         | Union (f, g) -> 
             f (c |> cmap (setval Structured))
 
+        | _ -> failwith "not recognized"
 
 
       
@@ -583,7 +584,7 @@ module Utils = struct
       let n = Array1.dim x in
       let b = Bytes.create n in
       for i = 0 to n-1 do
-        b.[i] <- Char.chr x.{i}
+        Bytes.set b i (Char.chr x.{i})
       done;
       Bytes.unsafe_to_string b
 
