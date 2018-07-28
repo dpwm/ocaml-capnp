@@ -301,8 +301,7 @@ let rec process_node node_map node =
           add_line "let union =" |> indent |>
           add_line (f "let union_tag = field t UInt16 %lul in" offset) |>
           add_line "let f c =" |> indent |>
-          add_line (f "match c |> get union_tag with") |>
-          indent |>
+          add_line (f "match c |> get union_tag with") |> indent |>
           (fun bodylines -> union_members |> List.rev |> List.fold_left (fun bodylines field ->
             let name = String.capitalize_ascii field.name in
             bodylines |>
@@ -315,8 +314,22 @@ let rec process_node node_map node =
               add_line (f "| %d -> %s (get (field t %s %lul) c)" n name typ offset)
           ) bodylines) |>
           unindent |>
-          unindent |> add_line "in ug f (fun x v -> failwith \"error\")" |> unindent
+          unindent |> 
+          add_line "in let g b = function" |> indent |>
+          (fun bodylines -> union_members |> List.rev |> List.fold_left (fun bodylines field ->
+            let name = String.capitalize_ascii field.name in
+            bodylines |>
+            match field.uniont, field.typ with
+            | Some n, Group (Struct (_, fullname, _, _, _, _, _)) ->
+              add_line (f "| %s x -> b |> set union_tag %d |> set (group t @@ Ptr Types.%s.t) x" name n fullname)
+            | Some n, Slot (offset, "Void",_) -> 
+              add_line (f "| %s -> b |> set union_tag %d" name n)
+            | Some n, Slot (offset, typ, _) -> 
+              add_line (f "| %s x -> b |> set union_tag %d |> set (field t %s %lul) x" name n typ offset)
+          ) bodylines) |>
+          unindent |> add_line "in Union(f, g)" |> unindent
 
+          
         end
         else 
           bodylines

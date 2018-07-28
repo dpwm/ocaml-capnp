@@ -138,7 +138,7 @@ module Declarative = struct
     | Float32 : float g
 
     | Struct : int * int -> 'a s g
-    | Union : ('b s c -> 'a) * ('b s c -> 'a -> unit) -> 'a g
+    | Union : ('b s c -> 'a) * ('b s c builder -> 'a -> 'b s c builder) -> 'a g
     | Enum : ('b -> 'a) * ('a -> 'b) -> 'a g
     | List : 'a g -> 'a array g
     | Ptr : 'a g -> 'a c g
@@ -147,10 +147,10 @@ module Declarative = struct
     | Interface : 'a i g
     | Method : 'a g * 'b g -> ('a -> 'b) g
   and stored = Stored : ('a g * 'a) -> stored
+  and 'a builder = Builder of 'a * stored array
 
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
 
-  type 'a builder = Builder of 'a * stored array
 
   type 'a sg = 'a s g
   type 'a ig = 'a i g
@@ -433,6 +433,7 @@ module Declarative = struct
       | List _ -> ptrs.(n) <- Stored (t, v); stream
       | Ptr _ -> ptrs.(n) <- Stored (t, v); stream
       | Text -> ptrs.(n) <- Stored (t, v); stream
+      | Union (_, g) -> g (Builder (c0 |> cmap (setval Structured), ptrs)) v; stream
       | _ -> failwith "This is not an offset field"
       );
 
