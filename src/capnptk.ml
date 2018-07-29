@@ -2,21 +2,21 @@
 module Stream = struct
   type ('data, 'a) t = { data : 'data; pos : int;  result : 'a }
   (* A very simple (read dangerous) stack based bytestream reader / writer *)
-  let pop {result=(a, _)} = a
+  let pop {result=(a, _); _} = a
   let popr c = {c with result=(snd c.result)}
 
   let map f c = {c with result = f c.result}
 
   let round_up d n = (((n - 1) / d) + 1) * d
 
-  let mov d ({pos} as c) = {c with pos = d + pos}
+  let mov d ({pos; _} as c) =  {c with pos = d + pos}
   let movw d = mov (8 * d)
   let align d c = {c with pos = round_up d c.pos}
   let push v c = {c with result = (v, c.result)}
-  let pop1 ({result = (a, result)} as c) = a, {c with result}
-  let pop2 ({result = (b, (a, result))} as c) = (a, b), {c with result}
-  let pop3 ({result = (c, (b, (a, result)))} as z) = (a, b, c), {z with result}
-  let pop4 ({result = (d, (c, (b, (a, result))))} as z) = (a, b, c, d), {z with result}
+  let pop1 ({result = (a, result); _} as c) = a, {c with result}
+  let pop2 ({result = (b, (a, result)); _} as c) = (a, b), {c with result}
+  let pop3 ({result = (c, (b, (a, result))); _} as z) = (a, b, c), {z with result}
+  let pop4 ({result = (d, (c, (b, (a, result)))); _} as z) = (a, b, c, d), {z with result}
   let map1 f c = c |> pop1 |> (fun (a, c) -> c |> push (f a))
   let map2 f c = c |> pop2 |> (fun (a, c) -> c |> push (f a))
   let map3 f c = c |> pop3 |> (fun (a, c) -> c |> push (f a))
@@ -191,7 +191,7 @@ module Declarative = struct
   let mov_field field c =
     let {pwords; dwords} = ensure_struct_ptr c in
     match field with
-    | PtrField (n, t, d) when n >= pwords -> 
+    | PtrField (n, _, _) when n >= pwords -> 
         failwith "Pointer out of range"
     | PtrField (n, t, d) ->
         c |> cmap (movw (n + dwords)) |> cmap (push (n, t, d))
@@ -335,7 +335,7 @@ module Declarative = struct
   let ug f g = Group (Union (f, g), None)
 
   let field : type st t. st g -> t g -> ?default:t -> Int32.t -> (st, t) field =
-    fun st t ?default offset ->
+    fun _ t ?default offset ->
       let ptrfield = 
         let b = Int32.(to_int offset) in
         PtrField (b, t, default)
@@ -354,7 +354,7 @@ module Declarative = struct
 
 
   let group : type st t. ?default:t -> st g -> t g -> (st, t) field =
-    fun ?default st t ->
+    fun ?default _ t ->
       Group(t, default)
 
 
@@ -391,7 +391,7 @@ module Declarative = struct
     map3 id |>
     pop1 |> (fun (x, c) ->
       match x with 
-      | (offset, 7, words) ->
+      | (offset, 7, _) ->
           c |> movw offset |> unsafe_read_struct |> map1 (fun (nelem, dwords, pwords) -> CompositeListPtr ({typ=7; nelem}, {dwords; pwords}) )
       | (offset, typ, nelem) -> 
           c |> movw offset |> push (ListPtr {typ; nelem})
@@ -403,7 +403,7 @@ module Declarative = struct
       match s |> read_int8 |> pop |> ((land) 3) with
 
       | 0 -> s |> unsafe_read_struct |> pop1 |> fun ((offset, dwords, pwords), s) -> 
-          s |> movw offset |> fun s -> s |> push @@ (s.pos, StructPtr {dwords; pwords})
+          s |> movw offset |> fun s ->  s |> push @@ (s.pos, StructPtr {dwords; pwords})
       | 1 -> s |> unsafe_read_list |> pop1 |> fun (x, s) -> s |> push (s.pos, x)
       | 2 -> s |> read_int64 |> read_bits64u 2 1 |> read_bits64u 3 29 |>
              read_bits64u 32 32  |> pop1 |> snd |> pop3 |> fun ((pad, offset, segment), s) ->
@@ -428,7 +428,7 @@ module Declarative = struct
       let Builder (c, ptrs) = ber in
       let c0 = c in
       let c = c |> mov_field field in
-      let (n, t, d), stream = c.stream |> pop1 in
+      let (n, t, _), stream = c.stream |> pop1 in
 
       (match t with
       | UInt64 -> stream |> push v |> write_int64
@@ -455,7 +455,8 @@ module Declarative = struct
     let open Stream in
     fun field c ->
       let c = c |> mov_field field in
-      let (b, t, default), stream = c.stream |> pop1 in
+      
+      let (_, t, default), stream = c.stream |> pop1 in
 
       match t with
         | UInt64 -> 
@@ -511,14 +512,18 @@ module Declarative = struct
 
 
         | Ptr (Struct _) -> 
-            let c = c |> c_read_ptr |> cmap (setval Structured) in
+            let c = 
+              (match field with | Group _ -> c | _ -> c |> c_read_ptr ) |>
+              cmap (setval Structured)
+            in
+
             c |> ensure_struct_ptr |> ignore;
             c
 
         | Struct _ -> 
             Structured
 
-        | Union (f, g) -> 
+        | Union (f, _) -> 
             f (c |> cmap (setval Structured))
 
         | _ -> failwith "not recognized"
@@ -559,29 +564,28 @@ module Rpc = struct
   }
 
   let declare : type a b. ('i g, a g, b g) method_t -> (a -> b) -> 'i ibuilder -> 'i ibuilder =
-    fun m f i ->
+    fun _ _ _ ->
       failwith "foo"
 
   let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> a implementation = 
-    fun x f ->
+    fun x _ ->
       match x with 
-      | Interface iface -> failwith "foo"
+      | Interface _ -> failwith "foo"
       | _ -> failwith "Must be an interface"
 
-  let connect_pipe (send,recv) =
+  let connect_pipe _ =
     ()
 
 
 
   let call : type a b. ('i g, a g, b g) method_t -> a -> client -> b =
-    fun iface a conn ->
+    fun _ _ _ ->
       failwith "connection failure"
 
 end
 
 module Utils = struct
   open Bigarray
-  open Declarative
   open Stream
   let from_stdin () =
     (* A 1MB buffer should be enough for anybody! *) 
@@ -612,11 +616,9 @@ module Utils = struct
       let open Stream in
       cursor data |> 
       read_header |>
-
       pop1 |> fun (sections, stream) -> 
-        Printf "pos: %d\n" stream.pos;
-        let posw = ref (stream.posw / 8) in
-        let sections = sections |> Array.map (fun x -> let v = !posw in posw := v + x; v) in
+        let pos = ref (stream.pos / 8) in
+        let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
         {stream; ptr=NullPtr; sections} |> c_read_ptr |> get (Group (ptr t, None))
 
     let to_string x = 
