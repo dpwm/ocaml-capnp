@@ -11,7 +11,7 @@ and
 ast =
   | File of (string * ast array)
   | Enum of (string * string *  string array)
-  | Interface of (string)
+  | Interface of (string * int64)
   | Const of string
   | Annotation of string
   | Struct of (string * string * int * int * int32 option * field array * ast array)
@@ -189,7 +189,8 @@ let rec process_node node_map node =
           ) in
         Struct (get_name node, get_full_name node, dwords, pwords, discriminantOffset, fields, nested)
     | Enum s -> Enum (get_name node, get_full_name node, s=>*Node.Enum.enumerants |> Array.map (fun f -> f =>* Enumerant.name))
-    | Interface _ -> Interface (get_name node)
+    | Interface _ ->
+        Interface (get_name node, 0xdeadbeefL)
     | Const _ -> Const (get_name node)
     | Annotation _ -> Annotation (get_name node)
 
@@ -313,6 +314,7 @@ let rec process_node node_map node =
             | Some n, Slot (offset, typ, _) -> 
               add_line (f "| %d -> %s (get (field t %s %lul) c)" n name typ offset)
           ) bodylines) |>
+          add_line "| n -> failwith @@ Printf.sprintf \"Invalid union tag: %d\" n" |>
           unindent |>
           unindent |> 
           add_line "in let g b = function" |> indent |>
@@ -358,6 +360,7 @@ let rec process_node node_map node =
         (fun lines -> enumerants |> Array.fold_left (fun (lines,n) x ->
           (lines |> add_line (x |> String.capitalize_ascii |> f "| %d -> %s" n), n+1)
         ) (lines, 0) |> fst) |>
+        add_line "| n -> failwith (Printf.sprintf \"Invalid enum tag: %d\" n)" |>
         unindent |>
         add_line "in" |>
         add_line "let g = function" |>
@@ -382,8 +385,17 @@ let rec process_node node_map node =
     | Annotation n ->
         lines, bodylines |> add_line (f "(* ANNOTATION %s *)" n)
 
-    | Interface n ->
-        lines, bodylines |> add_line (f "(* INTERFACE %s *)" n)
+    | Interface (name, id) ->
+        let lines = lines |>
+        add_line (f "module %s = struct" name) |>
+        indent |> 
+        add_line "type t" |>
+        add_line (f "let t : t ig = ig {id=0x%LxL}" id) |>
+        add_line "" in
+
+
+        (lines |> unindent |> add_line "end" |> add_line "",
+        bodylines)
 
     | _  ->
         (lines, bodylines)

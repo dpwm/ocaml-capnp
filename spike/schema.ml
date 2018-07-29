@@ -186,6 +186,7 @@ module Types = struct
         | 5 -> EightBytes
         | 6 -> Pointer
         | 7 -> InlineComposite
+        | n -> failwith (Printf.sprintf "Invalid enum tag: %d" n)
       in
       let g = function
         | Empty -> 0
@@ -353,13 +354,22 @@ module Decls = struct
           | 3 -> Interface (c |> get (group t @@ Ptr Types.Node.Interface.t))
           | 4 -> Const (c |> get (group t @@ Ptr Types.Node.Const.t))
           | 5 -> Annotation (c |> get (group t @@ Ptr Types.Node.Annotation.t))
-      in ug f (fun x v -> failwith "error")
+          | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+      in let g b = function
+        | File -> b |> set union_tag 0
+        | Struct x -> b |> set union_tag 1 |> set (group t @@ Ptr Types.Node.Struct.t) x
+        | Enum x -> b |> set union_tag 2 |> set (group t @@ Ptr Types.Node.Enum.t) x
+        | Interface x -> b |> set union_tag 3 |> set (group t @@ Ptr Types.Node.Interface.t) x
+        | Const x -> b |> set union_tag 4 |> set (group t @@ Ptr Types.Node.Const.t) x
+        | Annotation x -> b |> set union_tag 5 |> set (group t @@ Ptr Types.Node.Annotation.t) x
+      in ug f g
   end
   
   module Field = struct
     type t = Types.Field.t
     let t = Types.Field.t
-    (* CONST NoDiscriminant *)
+
+
     module Slot = struct
       type t = Types.Field.Slot.t
       let t = Types.Field.Slot.t
@@ -396,7 +406,11 @@ module Decls = struct
           match c |> get union_tag with
             | 0 -> Implicit
             | 1 -> Explicit (get (field t UInt16 96l) c)
-        in ug f (fun x v -> failwith "error")
+            | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+        in let g b = function
+          | Implicit -> b |> set union_tag 0
+          | Explicit x -> b |> set union_tag 1 |> set (field t UInt16 96l) x
+        in ug f g
     end
     
     
@@ -404,7 +418,8 @@ module Decls = struct
     let name = field t Text 0l
     let codeOrder = field t UInt16 0l
     let annotations = field t (List (ptr Types.Annotation.t)) 1l
-    let discriminantValue = field t UInt16 16l
+    let noDiscriminant = 0xffff
+    let discriminantValue = field ~default:noDiscriminant t UInt16 16l
     let ordinal = group t (ptr Types.Field.Ordinal.t)
     
     (* Unnamed union *)
@@ -418,7 +433,11 @@ module Decls = struct
         match c |> get union_tag with
           | 0 -> Slot (c |> get (group t @@ Ptr Types.Field.Slot.t))
           | 1 -> Group (c |> get (group t @@ Ptr Types.Field.Group.t))
-      in ug f (fun x v -> failwith "error")
+          | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+      in let g b = function
+        | Slot x -> b |> set union_tag 0 |> set (group t @@ Ptr Types.Field.Slot.t) x
+        | Group x -> b |> set union_tag 1 |> set (group t @@ Ptr Types.Field.Group.t) x
+      in ug f g
   end
   
   module Enumerant = struct
@@ -517,7 +536,13 @@ module Decls = struct
               | 1 -> Struct
               | 2 -> List
               | 3 -> Capability
-          in ug f (fun x v -> failwith "error")
+              | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+          in let g b = function
+            | AnyKind -> b |> set union_tag 0
+            | Struct -> b |> set union_tag 1
+            | List -> b |> set union_tag 2
+            | Capability -> b |> set union_tag 3
+          in ug f g
       end
       
       module Parameter = struct
@@ -553,7 +578,12 @@ module Decls = struct
             | 0 -> Unconstrained (c |> get (group t @@ Ptr Types.Type.AnyPointer.Unconstrained.t))
             | 1 -> Parameter (c |> get (group t @@ Ptr Types.Type.AnyPointer.Parameter.t))
             | 2 -> ImplicitMethodParameter (c |> get (group t @@ Ptr Types.Type.AnyPointer.ImplicitMethodParameter.t))
-        in ug f (fun x v -> failwith "error")
+            | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+        in let g b = function
+          | Unconstrained x -> b |> set union_tag 0 |> set (group t @@ Ptr Types.Type.AnyPointer.Unconstrained.t) x
+          | Parameter x -> b |> set union_tag 1 |> set (group t @@ Ptr Types.Type.AnyPointer.Parameter.t) x
+          | ImplicitMethodParameter x -> b |> set union_tag 2 |> set (group t @@ Ptr Types.Type.AnyPointer.ImplicitMethodParameter.t) x
+        in ug f g
     end
     
     
@@ -604,7 +634,28 @@ module Decls = struct
           | 16 -> Struct (c |> get (group t @@ Ptr Types.Type.Struct.t))
           | 17 -> Interface (c |> get (group t @@ Ptr Types.Type.Interface.t))
           | 18 -> AnyPointer (c |> get (group t @@ Ptr Types.Type.AnyPointer.t))
-      in ug f (fun x v -> failwith "error")
+          | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+      in let g b = function
+        | Void -> b |> set union_tag 0
+        | Bool -> b |> set union_tag 1
+        | Int8 -> b |> set union_tag 2
+        | Int16 -> b |> set union_tag 3
+        | Int32 -> b |> set union_tag 4
+        | Int64 -> b |> set union_tag 5
+        | Uint8 -> b |> set union_tag 6
+        | Uint16 -> b |> set union_tag 7
+        | Uint32 -> b |> set union_tag 8
+        | Uint64 -> b |> set union_tag 9
+        | Float32 -> b |> set union_tag 10
+        | Float64 -> b |> set union_tag 11
+        | Text -> b |> set union_tag 12
+        | Data -> b |> set union_tag 13
+        | List x -> b |> set union_tag 14 |> set (group t @@ Ptr Types.Type.List.t) x
+        | Enum x -> b |> set union_tag 15 |> set (group t @@ Ptr Types.Type.Enum.t) x
+        | Struct x -> b |> set union_tag 16 |> set (group t @@ Ptr Types.Type.Struct.t) x
+        | Interface x -> b |> set union_tag 17 |> set (group t @@ Ptr Types.Type.Interface.t) x
+        | AnyPointer x -> b |> set union_tag 18 |> set (group t @@ Ptr Types.Type.AnyPointer.t) x
+      in ug f g
   end
   
   module Brand = struct
@@ -628,7 +679,11 @@ module Decls = struct
           match c |> get union_tag with
             | 0 -> Bind (get (field t (List (ptr Types.Brand.Binding.t)) 0l) c)
             | 1 -> Inherit
-        in ug f (fun x v -> failwith "error")
+            | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+        in let g b = function
+          | Bind x -> b |> set union_tag 0 |> set (field t (List (ptr Types.Brand.Binding.t)) 0l) x
+          | Inherit -> b |> set union_tag 1
+        in ug f g
     end
     
     module Binding = struct
@@ -648,7 +703,11 @@ module Decls = struct
           match c |> get union_tag with
             | 0 -> Unbound
             | 1 -> Type (get (field t (ptr Types.Type.t) 0l) c)
-        in ug f (fun x v -> failwith "error")
+            | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+        in let g b = function
+          | Unbound -> b |> set union_tag 0
+          | Type x -> b |> set union_tag 1 |> set (field t (ptr Types.Type.t) 0l) x
+        in ug f g
     end
     
     
@@ -707,7 +766,28 @@ module Decls = struct
           | 16 -> Struct (get (field t (Ptr Void) 0l) c)
           | 17 -> Interface
           | 18 -> AnyPointer (get (field t (Ptr Void) 0l) c)
-      in ug f (fun x v -> failwith "error")
+          | n -> failwith @@ Printf.sprintf "Invalid union tag: %d" n
+      in let g b = function
+        | Void -> b |> set union_tag 0
+        | Bool x -> b |> set union_tag 1 |> set (field t Bool 16l) x
+        | Int8 x -> b |> set union_tag 2 |> set (field t Int8 16l) x
+        | Int16 x -> b |> set union_tag 3 |> set (field t Int16 16l) x
+        | Int32 x -> b |> set union_tag 4 |> set (field t Int32 32l) x
+        | Int64 x -> b |> set union_tag 5 |> set (field t Int64 64l) x
+        | Uint8 x -> b |> set union_tag 6 |> set (field t UInt8 16l) x
+        | Uint16 x -> b |> set union_tag 7 |> set (field t UInt16 16l) x
+        | Uint32 x -> b |> set union_tag 8 |> set (field t UInt32 32l) x
+        | Uint64 x -> b |> set union_tag 9 |> set (field t UInt64 64l) x
+        | Float32 x -> b |> set union_tag 10 |> set (field t Float32 32l) x
+        | Float64 x -> b |> set union_tag 11 |> set (field t Float64 64l) x
+        | Text x -> b |> set union_tag 12 |> set (field t Text 0l) x
+        | Data x -> b |> set union_tag 13 |> set (field t Data 0l) x
+        | List x -> b |> set union_tag 14 |> set (field t (Ptr Void) 0l) x
+        | Enum x -> b |> set union_tag 15 |> set (field t UInt16 16l) x
+        | Struct x -> b |> set union_tag 16 |> set (field t (Ptr Void) 0l) x
+        | Interface -> b |> set union_tag 17
+        | AnyPointer x -> b |> set union_tag 18 |> set (field t (Ptr Void) 0l) x
+      in ug f g
   end
   
   module Annotation = struct

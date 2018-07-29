@@ -162,14 +162,11 @@ module Declarative = struct
 
   type ('i, 'a, 'b) method_t = {
     method_id: int;
+    method_name: string;
     iface: 'i g; (* We need to know what the interface id is when we generate calls *)
     request: 'a g;
     response: 'b g;
   }
-
-  let call : type a b. ('i g, a g, b g) method_t -> a -> _ -> b =
-    fun iface a conn ->
-      failwith "connection failure"
 
   type ('s, 'a) field = 
     | Field of (int * int * 'a g * 'a option)
@@ -521,7 +518,6 @@ module Declarative = struct
         | Struct _ -> 
             Structured
 
-
         | Union (f, g) -> 
             f (c |> cmap (setval Structured))
 
@@ -539,6 +535,48 @@ module Declarative = struct
     (c, x)
 
   let (=<) = set
+end
+
+module Rpc = struct
+  open Declarative
+
+  type client
+  type 'a implementation = Implemention of 'a i g
+
+  (* A server is a collection of implementations *)
+  module Int = struct
+    type t = int
+    let compare a b = b - a
+  end
+
+  module IntMap = Map.Make(Int)
+
+  type imethod
+
+  type 'a ibuilder = {
+    interface: 'a;
+    methods : imethod IntMap.t;
+  }
+
+  let declare : type a b. ('i g, a g, b g) method_t -> (a -> b) -> 'i ibuilder -> 'i ibuilder =
+    fun m f i ->
+      failwith "foo"
+
+  let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> a implementation = 
+    fun x f ->
+      match x with 
+      | Interface iface -> failwith "foo"
+      | _ -> failwith "Must be an interface"
+
+  let connect_pipe (send,recv) =
+    ()
+
+
+
+  let call : type a b. ('i g, a g, b g) method_t -> a -> client -> b =
+    fun iface a conn ->
+      failwith "connection failure"
+
 end
 
 module Utils = struct
