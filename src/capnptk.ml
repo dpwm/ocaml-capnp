@@ -1,3 +1,4 @@
+exception OrdinalError of int
 
 module Stream = struct
   type ('data, 'a) t = { data : 'data; pos : int;  result : 'a }
@@ -87,6 +88,7 @@ module Stream = struct
 
 end
 module Declarative = struct
+
   open Bigarray
   exception Error of string
 
@@ -139,7 +141,7 @@ module Declarative = struct
 
     | Struct : int * int -> 'a s g
     | Union : ('b s c -> 'a) * ('b s c builder -> 'a -> 'b s c builder) -> 'a g
-    | Enum : ('b -> 'a) * ('a -> 'b) -> 'a g
+    | Enum : (int -> 'a) * ('a -> int) -> 'a g
     | List : 'a g -> 'a array g
     | Ptr : 'a g -> 'a c g
     | Text : string g
@@ -184,6 +186,7 @@ module Declarative = struct
 
   let ensure_list_ptr c = match c.ptr with
     | ListPtr x -> x
+    | NullPtr -> {typ=0; nelem=0}
     | _ -> failwith "Expected list pointer"
 
   let cmap f c = {c with stream = f c.stream}
@@ -402,8 +405,10 @@ module Declarative = struct
     let rec read_ptr s = 
       match s |> read_int8 |> pop |> ((land) 3) with
 
-      | 0 -> s |> unsafe_read_struct |> pop1 |> fun ((offset, dwords, pwords), s) -> 
-          s |> movw offset |> fun s ->  s |> push @@ (s.pos, StructPtr {dwords; pwords})
+      | 0 -> s |> unsafe_read_struct |> pop1 |> (function 
+        | ((0, 0, 0), s) -> s |> push @@ (s.pos, NullPtr)
+        | ((offset, dwords, pwords), s) -> 
+          s |> movw offset |> fun s ->  s |> push @@ (s.pos, StructPtr {dwords; pwords}))
       | 1 -> s |> unsafe_read_list |> pop1 |> fun (x, s) -> s |> push (s.pos, x)
       | 2 -> s |> read_int64 |> read_bits64u 2 1 |> read_bits64u 3 29 |>
              read_bits64u 32 32  |> pop1 |> snd |> pop3 |> fun ((pad, offset, segment), s) ->
@@ -451,12 +456,54 @@ module Declarative = struct
 
       ber
 
+
+  let get_field_type = function
+      | Field (_, _, t, _) -> t
+      | PtrField (_, t, _) -> t
+      | Group (t, _) -> t
+
+  let set_field_type t = function
+    | Field (a, b, _, _) -> Field (a, b, t, None)
+    | PtrField (a, _, _) -> PtrField (a, t, None)
+    | Group (_, _) -> Group (t, None)
+
+  (* We don't cast values, we cast addresses. *)
+  let cast : type a b s. b g -> (s, a) field  -> (s, b) field =
+    fun t2 field -> 
+      let t1 = get_field_type field in
+      match (t1, t2) with
+      | (Ptr Void, List _) -> field |> set_field_type t2
+      | (_, _) -> failwith "invalid cast"
+
+  let rec show : type a. a g -> string = function
+    | UInt64 -> "UInt64"
+    | UInt32 -> "UInt32"
+    | UInt16 -> "UInt16"
+    | UInt8  -> "UInt8"
+    | Int64  -> "Int64"
+    | Int32  -> "Int32"
+    | Int16  -> "Int16"
+    | Int8   ->  "Int8"
+    | Float64 -> "Float64"
+    | Float32 -> "Float32"
+    | Bool -> "Bool"
+    | Void -> "Void"
+    | Text -> "Text" 
+    | Data -> "Data" 
+    | Struct _ -> "Struct"
+    | Ptr t -> Printf.sprintf "(Ptr %s)" (show t)
+    | Union _ -> "Union"
+    | List t -> Printf.sprintf "(List %s)" (show t)
+    | Enum _ -> "Enum"
+    | Interface _ -> "Interface"
+
+
   let get : type a s. (s, a) field -> s c -> a =
     let open Stream in
     fun field c ->
       let c = c |> mov_field field in
       
-      let (_, t, default), stream = c.stream |> pop1 in
+      let (b, t, default), stream = c.stream |> pop1 in
 
       match t with
         | UInt64 -> 
@@ -488,27 +535,32 @@ module Declarative = struct
         | Float32 -> stream |> read_int32 |> pop |> mapDefault (mapSome Int32.bits_of_float default) (Int32.logxor) |> Int32.float_of_bits
         | Float64 -> stream |> read_int64 |> pop |> mapDefault (mapSome Int64.bits_of_float default) (Int64.logxor) |> Int64.float_of_bits
         | Void -> ()
-        | Bool -> true
+        | Bool -> stream |> read_int8 |> pop |> (lsr) b |> (land) 1 |> (function | 0 -> false | _ -> true)
         | Data -> ""
-        | List Ptr (Struct _)-> 
+        | List Ptr (Struct _) -> 
             let c = c |> c_read_ptr in
-            let lptr, sptr = c |> ensure_compositelist_ptr in
-            let elem0 = {c with ptr=StructPtr sptr} |> cmap (setval Structured) in
-            let swords = sptr.pwords + sptr.dwords in
-            let out = Array.make lptr.nelem elem0 in
-            Array.iteri (fun i _ -> 
-              out.(i) <- elem0 |> cmap (movw (i * swords));
-            ) out;
-            out
+            (match c.ptr with
+            | CompositeListPtr (lptr, sptr) ->
+              let elem0 = {c with ptr=StructPtr sptr} |> cmap (setval Structured) in
+              let swords = sptr.pwords + sptr.dwords in
+              let out = Array.make lptr.nelem elem0 in
+              Array.iteri (fun i _ -> 
+                out.(i) <- elem0 |> cmap (movw (i * swords));
+              ) out;
+              out
+            | NullPtr -> [| |]
+            | _ -> failwith "Expected Composite List Pointer"
+              )
         | Text -> 
             let c = c |> c_read_ptr in
-            let v = c |> ensure_list_ptr in
-            if v.typ <> 2 then failwith "Expected byte list, got something else";
-            let out = Buffer.create (v.nelem - 1) in
-            for i = 0 to (v.nelem - 2) do
-              Buffer.add_char out (Char.chr c.stream.data.{c.stream.pos + i});
-            done;
-            Buffer.contents out
+            (match c.ptr with
+            | ListPtr {nelem; typ=2} when nelem >= 1 ->
+              let out = Buffer.create (nelem - 1) in
+              for i = 0 to (nelem - 2) do
+                Buffer.add_char out (Char.chr c.stream.data.{c.stream.pos + i});
+              done;
+              Buffer.contents out
+            | _ -> "")
 
 
         | Ptr (Struct _) -> 
@@ -526,7 +578,20 @@ module Declarative = struct
         | Union (f, _) -> 
             f (c |> cmap (setval Structured))
 
-        | _ -> failwith "not recognized"
+        | Ptr Void ->
+            c |> cmap (setval ())
+
+        | List Ptr _ ->
+            let c = c |> c_read_ptr in
+            (match c.ptr with
+            | CompositeListPtr ({nelem; _}, _) when nelem >= 1 ->
+                [| |]
+            | ListPtr _ ->
+                [| |]
+            | _ -> [| |])
+
+
+        | t -> failwith (Printf.sprintf "Could not match: %s" (show t))
 
 
       
