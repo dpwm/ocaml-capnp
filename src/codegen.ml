@@ -29,13 +29,16 @@ let statement_open name fmt =
 
 
 let import_from_head name fmt =
-  fprintf fmt "@ type t = Head.%s.t@ let  t = Head.%s.t" name name; fmt
+  fprintf fmt "@ type t = Self.%s.t@ let  t = Self.%s.t" name name; fmt
 
 let open_head fmt = 
-  fprintf fmt "@ @[@[<v 2>module Head = struct"; fmt
+  fprintf fmt "@ @[@[<v 2>module Self = struct"; fmt
 
 let open_body fmt = 
-  fprintf fmt "@ @[@[<v 2>module Body = struct"; fmt
+  fprintf fmt "@ @[<v 0>"; fmt
+
+let close_body fmt = 
+  fprintf fmt "@ @]"; fmt
 
 let open_module name fmt =
   fprintf fmt "@ @[@[<hov 2>module %s = struct" name; fmt
@@ -74,6 +77,5 @@ let close_module fmt =
 let close_types = close_module
 
 let close_top fmt = 
-  fprintf fmt "@ @ include Body"; 
   fprintf fmt "@]";
   fmt

@@ -39,8 +39,7 @@ let sanitize_name =
     "true";
     "false";
     "method";
-    "Head";
-    "Body"; 
+    "Self";
   ]
    in
    fun name ->
@@ -60,7 +59,7 @@ let rec node_chain get_node node =
     | 0L -> [node]
     | id -> node :: (id |> get_node |> node_chain get_node)
 
-let rec show_node_head fmt get_node node =
+let rec show_node_head fmt get_node (petname,node) =
   let open Codegen in
   match node => Node.union with
   | File ->
@@ -69,24 +68,30 @@ let rec show_node_head fmt get_node node =
       statement_open "Capnptk.Declarative" |> open_head |> ignore;
 
       node => Node.nestedNodes |> Array.iter (fun n -> 
-        n => Node.NestedNode.id |> get_node |>
+        (n => Node.NestedNode.name, n => Node.NestedNode.id |> get_node) |>
         show_node_head fmt get_node |> ignore);
 
       fmt |>  close_module
   | Struct s ->
-      let name = node_name node |> String.capitalize_ascii in
+      let name = petname |> String.capitalize_ascii in
       fmt |> 
       open_module name |> 
+      (if node => Node.isGeneric then
+        comment "GENERIC!"
+      else
+        fun x -> x)
+      |>
+
       structure_type (s=>Node.Struct.dataWordCount) (s=>Node.Struct.pointerCount) |>
       (fun fmt -> 
         (* we also need to get any fields that represent groups *)
         node => Node.nestedNodes |> Array.iter (fun x -> 
-          x => Node.NestedNode.id |> get_node |> 
+          (x => Node.NestedNode.name, x => Node.NestedNode.id |> get_node) |> 
           show_node_head fmt get_node |> ignore); 
         s => Node.Struct.fields |> Array.iter (fun x -> 
           match x => Field.union with
           | Group g ->
-              g => Field.Group.typeId |> get_node |> show_node_head fmt get_node |> ignore
+              (x => Field.name, g => Field.Group.typeId |> get_node) |> show_node_head fmt get_node |> ignore
           | _ -> ());
           fmt) |>
       close_module 
@@ -156,7 +161,7 @@ let ocaml_literal value =
 
 let rec ocaml_type get_node typ =
   let fmt = Printf.sprintf in
-  let named_type id = id |> get_node |> qualified_name get_node |> fst |> fmt "Head.%s.t" in
+  let named_type id = id |> get_node |> qualified_name get_node |> fst |> fmt "Self.%s.t" in
   match typ => Type.union with
   | Void -> "unit"
   | Bool -> "bool"
@@ -184,7 +189,7 @@ let rec ocaml_type get_node typ =
 
 let rec capnptk_type get_node typ =
   let fmt = Printf.sprintf in
-  let named_type id = id |> get_node |> qualified_name get_node |> fst |> fmt "Head.%s.t" in
+  let named_type id = id |> get_node |> qualified_name get_node |> fst |> fmt "Self.%s.t" in
   match typ => Type.union with
   | Void -> "Void"
   | Bool -> "Bool"
@@ -235,7 +240,7 @@ let field_accessor get_node field =
         default
         (Int32.mul (slot => Field.Slot.offset) (slot => Field.Slot.type_ |> capnptk_sizeof)))
     | Group group -> 
-        Some (Printf.sprintf "group t (Ptr Head.%s.t)" (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst))
+        Some (Printf.sprintf "group t (Ptr Self.%s.t)" (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst))
 
 let rec show_node_body fmt get_node node =
   let open Codegen in
@@ -252,7 +257,7 @@ let rec show_node_body fmt get_node node =
         n => Node.NestedNode.id |> get_node |>
         show_node_body fmt get_node |> ignore);
 
-      fmt |> close_module |> close_top
+      fmt |> close_body |> close_top
   | Struct s ->
       fmt |> 
       open_body_module name |> 
@@ -300,7 +305,7 @@ let rec show_node_body fmt get_node node =
               | Slot slot ->
                   fprintf fmt "@ | %s of %s" fieldname (slot => Field.Slot.type_ |> ocaml_type get_node)
               | Group group -> 
-                  fprintf fmt "@ | %s of Head.%s.t s c" fieldname (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst)
+                  fprintf fmt "@ | %s of Self.%s.t s c" fieldname (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst)
             );
 
             fprintf fmt "@]";
@@ -399,7 +404,7 @@ let () =
   CodeGeneratorRequest.(cgr => requestedFiles |> Array.iter (
     fun file -> 
       file => RequestedFile.id |> get_node |> (fun n ->
-        n |> show_node_head fmt get_node |> ignore;
+        (file => RequestedFile.filename, n) |> show_node_head fmt get_node |> ignore;
         n |> show_node_body fmt get_node |> ignore)
   ));
 
