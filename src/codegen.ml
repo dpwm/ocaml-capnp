@@ -74,4 +74,6 @@ let close_module fmt =
 let close_types = close_module
 
 let close_top fmt = 
-  fprintf fmt "@]"; fmt
+  fprintf fmt "@ @ include Body"; 
+  fprintf fmt "@]";
+  fmt

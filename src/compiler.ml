@@ -22,6 +22,7 @@ let sanitize_name =
     "c";
     "sg";
     "ig";
+    "type";
     "union";
     "object"; 
     "module"; 
@@ -47,11 +48,12 @@ let sanitize_name =
      | true -> name ^ "_"
      | false -> name
 
-let node_name node =
+let node_name ?(capitalize=true) node =
   let p = node => Node.displayNamePrefixLength |> Int32.to_int in
   let s = node => Node.displayName in
   let n = String.length s in
-  String.sub s p (n - p) |> String.capitalize_ascii |> sanitize_name
+  String.sub s p (n - p) |> (fun x -> 
+    if capitalize then String.capitalize_ascii x else x) |> sanitize_name
 
 let rec node_chain get_node node =
   node => Node.scopeId |> function
@@ -146,7 +148,9 @@ let ocaml_literal value =
       ((ap |> c_read_ptr).ptr |> function
         | NullPtr -> None
         | _ -> failwith "boO")
+
   | Enum _ -> None
+
   | AnyPointer _ -> None
 
 
@@ -209,7 +213,11 @@ let rec capnptk_type get_node typ =
 
 let capnptk_sizeof typ =
   match typ => Type.union with
-  _ -> 0l
+  | Int8 | Uint8 -> 8l
+  | Int16 | Uint16 | Enum _ -> 16l
+  | Int32 | Uint32 | Float32 -> 32l
+  | Int64 | Uint64 | Float64 -> 64l
+  | _ -> 1l
 
 
 let field_accessor get_node field =
@@ -244,7 +252,6 @@ let rec show_node_body fmt get_node node =
         n => Node.NestedNode.id |> get_node |>
         show_node_body fmt get_node |> ignore);
 
-
       fmt |> close_module |> close_top
   | Struct s ->
       fmt |> 
@@ -255,6 +262,12 @@ let rec show_node_body fmt get_node node =
        * iterate over all union fields *)
 
       Node.(node => nestedNodes |> Array.iter (fun x -> x => NestedNode.id |> get_node |> show_node_body fmt get_node |> ignore));
+
+      s => Node.Struct.fields |> Array.iter (fun x -> 
+        match x => Field.union with
+        | Group g ->
+            g => Field.Group.typeId |> get_node |> show_node_body fmt get_node |> ignore
+        | _ -> ());
       
       let fields = s => Node.Struct.fields in
 
@@ -293,7 +306,7 @@ let rec show_node_body fmt get_node node =
             fprintf fmt "@]";
 
             fprintf fmt "@ @[<v 2>let union =";
-            fprintf fmt "@ let union_tag = field t UInt16 96l in";
+            fprintf fmt "@ let union_tag = field t UInt16 %ldl in" (s => Node.Struct.discriminantOffset |> Int32.mul 16l);
             fprintf fmt "@ @[<v 2>let f c =";
             fprintf fmt "@ @[<v 2>match c => union_tag with";
 
@@ -357,7 +370,11 @@ let rec show_node_body fmt get_node node =
       close_module 
 
   (* We don't define consts until implementation *)
-  | Const _ | Annotation _ -> fmt
+  | Const c -> 
+      let name = node_name ~capitalize:false node |> sanitize_name in
+      Format.fprintf fmt "@ let %s = %s" name (c => Node.Const.value |> ocaml_literal |> function | Some x -> x | _ -> failwith "_"); fmt
+
+  | Annotation _ -> fmt
 
 let () =
   let cgr = Capnptk.Utils.(from_stdin () |> decode (CodeGeneratorRequest.t)) in
