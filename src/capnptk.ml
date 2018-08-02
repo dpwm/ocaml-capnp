@@ -154,12 +154,12 @@ module Declarative = struct
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
 
 
-  type 'a sg = 'a s g
+  type 'a sg = 'a s c g
   type 'a ig = 'a i g
   type 'a sgu = 'a s c
   type 'a ug = 'a s g
 
-  let sg dsize psize = Struct (dsize, psize)
+  let sg dsize psize = Ptr (Struct (dsize, psize))
   let ig id = Interface (ref [||], id)
 
   type ('i, 'a, 'b) method_t = {
@@ -337,7 +337,7 @@ module Declarative = struct
 
   let ug f g = Group (Union (f, g), None)
 
-  let field : type st t. st g -> t g -> ?default:t -> Int32.t -> (st, t) field =
+  let field : type st t. st c g -> t g -> ?default:t -> Int32.t -> (st, t) field =
     fun _ t ?default offset ->
       let ptrfield = 
         let b = Int32.(to_int offset) in
@@ -356,7 +356,7 @@ module Declarative = struct
         Field (b8, b, t, default)
 
 
-  let group : type st t. ?default:t -> st g -> t g -> (st, t) field =
+  let group : type st t. ?default:t -> st c g -> t g -> (st, t) field =
     fun ?default _ t ->
       Group(t, default)
 
@@ -684,7 +684,7 @@ module Utils = struct
       pop1 |> fun (sections, stream) -> 
         let pos = ref (stream.pos / 8) in
         let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
-        {stream; ptr=NullPtr; sections} |> c_read_ptr |> get (Group (ptr t, None))
+        {stream; ptr=NullPtr; sections} |> c_read_ptr |> get (Group (t, None))
 
     let to_string x = 
       let open Bigarray in

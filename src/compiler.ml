@@ -266,7 +266,7 @@ let field_accessor get_node field =
         default
         (Int32.mul (slot => Field.Slot.offset) (slot => Field.Slot.type_ |> capnptk_sizeof)))
     | Group group -> 
-        Some (Printf.sprintf "group t (Ptr Self.%s.t)" (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst))
+        Some (Printf.sprintf "group t (Self.%s.t)" (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst))
 
 let rec show_node_body (state:state) node =
   let open Codegen in
@@ -334,7 +334,7 @@ let rec show_node_body (state:state) node =
               | Slot slot ->
                   Some (slot => Field.Slot.type_ |> ocaml_type get_node)
               | Group group -> 
-                  Some (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst)
+                  Some (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst |> Printf.sprintf "Self.%s.t s c")
               in
               (constructor, typ, tag, accessor)
             ) |> union_block fmt tag_offset;
