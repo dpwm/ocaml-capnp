@@ -44,13 +44,56 @@ let open_module name fmt =
   fprintf fmt "@ @[@[<hov 2>module %s = struct" name; fmt
 
 let open_body_module name fmt =
-  fprintf fmt "@ @[<v>@[<v 2>module %s = struct" name; fmt
+  fprintf fmt "@ @ @[<v>@[<v 2>module %s = struct" name; fmt
 
 let structure_type dwords pwords fmt =
   fprintf fmt "@ @[type t@ let t : t sg@ =@ sg %d %d@]" dwords pwords; fmt
 
 let interface_type id fmt =
   fprintf fmt "@ @[type t@ let t : t ig@ =@ ig 0x%LxL@]" id; fmt
+
+let let_statement name expr fmt = 
+  fprintf fmt "@ let %s = %s" name expr; fmt
+
+let union_block fmt d xs = 
+  fprintf fmt "@,@ @[<v 2>type union =";
+  xs |> Array.iter (function 
+    | (constructor, Some typ, _, _) -> 
+        fprintf fmt "@ | %s of %s" constructor typ
+    | (constructor, None, _, _) -> 
+        fprintf fmt "@ | %s" constructor
+  );
+  fprintf fmt "@]";
+  fprintf fmt "@ @[<v 2>let union =";
+  fprintf fmt "@ let union_tag = field t UInt16 %ldl in" d;
+  fprintf fmt "@ @[<v 2>let f c =";
+  fprintf fmt "@ @[<v 2>match c => union_tag with";
+
+  xs |> Array.iter (function
+    | (constructor, Some _, tag, Some accessor) ->
+        fprintf fmt "@ | %d -> %s (c => (%s))" tag constructor accessor
+    | (constructor, None, tag, None) ->
+        fprintf fmt "@ | %d -> %s" tag constructor
+    | (_, _, _, _) -> failwith "inconsistent"
+  );
+
+  fprintf fmt "@ | n -> raise (Capnptk.OrdinalError n)";
+  fprintf fmt "@]";
+  fprintf fmt "@]@ in";
+  fprintf fmt "@ @[<v 2>let g b = function";
+
+  xs |> Array.iter (function
+    | (constructor, Some _, tag, Some accessor) ->
+        fprintf fmt "@ | %s v -> b |> set (%s) v |> set union_tag %d" constructor accessor tag 
+    | (constructor, None, tag, None) ->
+        fprintf fmt "@ | %s -> b |> set union_tag %d;" constructor tag 
+    | (_, _, _, _) -> failwith "inconsistent"
+  );
+
+  fprintf fmt "@]@ in ug f g";
+  fprintf fmt "@]"
+
+
 
 let enum_type enumerants fmt =
   fprintf fmt "@ @[<hov>type t =";
