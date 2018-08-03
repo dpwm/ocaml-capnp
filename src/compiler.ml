@@ -61,7 +61,7 @@ let rec node_chain get_node node =
 
 
 type state = {
-  node : int64 -> Node.t s c;
+  node : int64 -> Node.t;
   paths : string list Int64Map.t;
   path : string list;
   fmt : Format.formatter;
@@ -208,7 +208,7 @@ let rec ocaml_type get_node typ =
   | Enum e -> 
       e => Type.Enum.typeId |> named_type
   | Struct e -> 
-      e => Type.Struct.typeId |> named_type |> Printf.sprintf "%s s c" 
+      e => Type.Struct.typeId |> named_type |> Printf.sprintf "%s" 
   | Interface i ->
       i => Type.Interface.typeId |> named_type 
   | AnyPointer _ -> "unit c"
@@ -334,7 +334,7 @@ let rec show_node_body (state:state) node =
               | Slot slot ->
                   Some (slot => Field.Slot.type_ |> ocaml_type get_node)
               | Group group -> 
-                  Some (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst |> Printf.sprintf "Self.%s.t s c")
+                  Some (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst |> Printf.sprintf "Self.%s.t")
               in
               (constructor, typ, tag, accessor)
             ) |> union_block fmt tag_offset;

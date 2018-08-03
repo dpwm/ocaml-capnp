@@ -47,7 +47,7 @@ let open_body_module name fmt =
   fprintf fmt "@ @ @[<v>@[<v 2>module %s = struct" name; fmt
 
 let structure_type dwords pwords fmt =
-  fprintf fmt "@ @[type t@ let t : t sg@ =@ sg %d %d@]" dwords pwords; fmt
+  fprintf fmt "@ @[type t'@ type t = t' sgu let t : t g@ =@ sg %d %d@]" dwords pwords; fmt
 
 let interface_type id fmt =
   fprintf fmt "@ @[type t@ let t : t ig@ =@ ig 0x%LxL@]" id; fmt

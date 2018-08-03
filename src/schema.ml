@@ -5,43 +5,53 @@
 open Capnptk.Declarative
 
 module Self = struct
-  module Node = struct type t let t : t sg = sg 5 6
-    module Parameter = struct type t let t : t sg = sg 0 1 end
-    module NestedNode = struct type t let t : t sg = sg 1 1 end
-    module SourceInfo = struct type t let t : t sg = sg 1 2
-      module Member = struct type t let t : t sg = sg 0 1 end
-    end module Struct = struct type t let t : t sg = sg 5 6 end
-    module Enum = struct type t let t : t sg = sg 5 6 end
-    module Interface = struct type t let t : t sg = sg 5 6 end
-    module Const = struct type t let t : t sg = sg 5 6 end
-    module Annotation = struct type t let t : t sg = sg 5 6 end
+  module Node = struct type t' type t = t' sgu let t : t g = sg 5 6
+    module Parameter = struct type t' type t = t' sgu let t : t g = sg 0 1
+    end
+    module NestedNode = struct type t' type t = t' sgu let t : t g = sg 1 1
+    end
+    module SourceInfo = struct type t' type t = t' sgu let t : t g = sg 1 2
+      module Member = struct type t' type t = t' sgu let t : t g = sg 0 1 end
+    end
+    module Struct = struct type t' type t = t' sgu let t : t g = sg 5 6 end
+    module Enum = struct type t' type t = t' sgu let t : t g = sg 5 6 end
+    module Interface = struct type t' type t = t' sgu let t : t g = sg 5 6
+    end
+    module Const = struct type t' type t = t' sgu let t : t g = sg 5 6 end
+    module Annotation = struct type t' type t = t' sgu let t : t g = sg 5 6
+    end
   end
-  module Field = struct type t let t : t sg = sg 3 4
-    module Slot = struct type t let t : t sg = sg 3 4 end
-    module Group = struct type t let t : t sg = sg 3 4 end
-    module Ordinal = struct type t let t : t sg = sg 3 4 end
+  module Field = struct type t' type t = t' sgu let t : t g = sg 3 4
+    module Slot = struct type t' type t = t' sgu let t : t g = sg 3 4 end
+    module Group = struct type t' type t = t' sgu let t : t g = sg 3 4 end
+    module Ordinal = struct type t' type t = t' sgu let t : t g = sg 3 4 end
   end
-  module Enumerant = struct type t let t : t sg = sg 1 2 end
-  module Superclass = struct type t let t : t sg = sg 1 1 end
-  module Method = struct type t let t : t sg = sg 3 5 end
-  module Type = struct type t let t : t sg = sg 3 1
-    module List = struct type t let t : t sg = sg 3 1 end
-    module Enum = struct type t let t : t sg = sg 3 1 end
-    module Struct = struct type t let t : t sg = sg 3 1 end
-    module Interface = struct type t let t : t sg = sg 3 1 end
-    module AnyPointer = struct type t let t : t sg = sg 3 1
-      module Unconstrained = struct type t let t : t sg = sg 3 1 end
-      module Parameter = struct type t let t : t sg = sg 3 1 end
-      module ImplicitMethodParameter = struct type t let t : t sg = sg 3 1
+  module Enumerant = struct type t' type t = t' sgu let t : t g = sg 1 2 end
+  module Superclass = struct type t' type t = t' sgu let t : t g = sg 1 1 end
+  module Method = struct type t' type t = t' sgu let t : t g = sg 3 5 end
+  module Type = struct type t' type t = t' sgu let t : t g = sg 3 1
+    module List = struct type t' type t = t' sgu let t : t g = sg 3 1 end
+    module Enum = struct type t' type t = t' sgu let t : t g = sg 3 1 end
+    module Struct = struct type t' type t = t' sgu let t : t g = sg 3 1 end
+    module Interface = struct type t' type t = t' sgu let t : t g = sg 3 1
+    end
+    module AnyPointer = struct type t' type t = t' sgu let t : t g = sg 3 1
+      module Unconstrained = struct
+        type t' type t = t' sgu let t : t g = sg 3 1
+      end
+      module Parameter = struct type t' type t = t' sgu let t : t g = sg 3 1
+      end
+      module ImplicitMethodParameter = struct
+        type t' type t = t' sgu let t : t g = sg 3 1
       end
     end
   end
-  module Brand = struct type t let t : t sg = sg 0 1
-    module Scope = struct type t let t : t sg = sg 2 1 end
-    module Binding = struct type t let t : t sg = sg 1 1 end
+  module Brand = struct type t' type t = t' sgu let t : t g = sg 0 1
+    module Scope = struct type t' type t = t' sgu let t : t g = sg 2 1 end
+    module Binding = struct type t' type t = t' sgu let t : t g = sg 1 1 end
   end
-  module Value = struct type t let t : t sg = sg 2 1 end
-  module Annotation = struct type t let t : t sg = sg 1 2 end
+  module Value = struct type t' type t = t' sgu let t : t g = sg 2 1 end
+  module Annotation = struct type t' type t = t' sgu let t : t g = sg 1 2 end
   module ElementSize = struct
     type t = | Empty | Bit | Byte | TwoBytes | FourBytes | EightBytes
     | Pointer | InlineComposite let t = let f = function | 0 -> Empty
@@ -51,10 +61,13 @@ module Self = struct
     | Byte -> 2 | TwoBytes -> 3 | FourBytes -> 4 | EightBytes -> 5
     | Pointer -> 6 | InlineComposite -> 7 in Enum(f, g)
   end
-  module CapnpVersion = struct type t let t : t sg = sg 1 0 end
-  module CodeGeneratorRequest = struct type t let t : t sg = sg 0 4
-    module RequestedFile = struct type t let t : t sg = sg 1 2
-      module Import = struct type t let t : t sg = sg 1 1 end
+  module CapnpVersion = struct type t' type t = t' sgu let t : t g = sg 1 0
+  end
+  module CodeGeneratorRequest = struct
+    type t' type t = t' sgu let t : t g = sg 0 4
+    module RequestedFile = struct
+      type t' type t = t' sgu let t : t g = sg 1 2
+      module Import = struct type t' type t = t' sgu let t : t g = sg 1 1 end
     end
   end
 end
@@ -148,11 +161,11 @@ module Node = struct
   
   type union =
     | File
-    | Struct of Self.Node.Struct.t s c
-    | Enum of Self.Node.Enum.t s c
-    | Interface of Self.Node.Interface.t s c
-    | Const of Self.Node.Const.t s c
-    | Annotation of Self.Node.Annotation.t s c
+    | Struct of Self.Node.Struct.t
+    | Enum of Self.Node.Enum.t
+    | Interface of Self.Node.Interface.t
+    | Const of Self.Node.Const.t
+    | Annotation of Self.Node.Annotation.t
   let union =
     let union_tag = field t UInt16 96l in
     let f c =
@@ -225,8 +238,8 @@ module Field = struct
   end
   
   type union =
-    | Slot of Self.Field.Slot.t s c
-    | Group of Self.Field.Group.t s c
+    | Slot of Self.Field.Slot.t
+    | Group of Self.Field.Group.t
   let union =
     let union_tag = field t UInt16 64l in
     let f c =
@@ -350,9 +363,9 @@ module Type = struct
     end
     
     type union =
-      | Unconstrained of Self.Type.AnyPointer.Unconstrained.t s c
-      | Parameter of Self.Type.AnyPointer.Parameter.t s c
-      | ImplicitMethodParameter of Self.Type.AnyPointer.ImplicitMethodParameter.t s c
+      | Unconstrained of Self.Type.AnyPointer.Unconstrained.t
+      | Parameter of Self.Type.AnyPointer.Parameter.t
+      | ImplicitMethodParameter of Self.Type.AnyPointer.ImplicitMethodParameter.t
     let union =
       let union_tag = field t UInt16 64l in
       let f c =
@@ -384,11 +397,11 @@ module Type = struct
     | Float64
     | Text
     | Data
-    | List of Self.Type.List.t s c
-    | Enum of Self.Type.Enum.t s c
-    | Struct of Self.Type.Struct.t s c
-    | Interface of Self.Type.Interface.t s c
-    | AnyPointer of Self.Type.AnyPointer.t s c
+    | List of Self.Type.List.t
+    | Enum of Self.Type.Enum.t
+    | Struct of Self.Type.Struct.t
+    | Interface of Self.Type.Interface.t
+    | AnyPointer of Self.Type.AnyPointer.t
   let union =
     let union_tag = field t UInt16 0l in
     let f c =
@@ -446,7 +459,7 @@ module Brand = struct
     let  t = Self.Brand.Scope.t
     
     type union =
-      | Bind of Self.Brand.Binding.t s c array
+      | Bind of Self.Brand.Binding.t array
       | Inherit
     let union =
       let union_tag = field t UInt16 64l in
@@ -469,7 +482,7 @@ module Brand = struct
     
     type union =
       | Unbound
-      | Type of Self.Type.t s c
+      | Type of Self.Type.t
     let union =
       let union_tag = field t UInt16 0l in
       let f c =

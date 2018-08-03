@@ -703,11 +703,6 @@ module type Type = sig
   val t : t g
 end
 
-module type Struct = sig
-  open Declarative
-  type t
-  val t : t s g
-end
 
 module Functors = struct
   open Declarative
@@ -725,5 +720,4 @@ module Functors = struct
   module Text : Type   = struct type t = string let t = Data end
   module Data : Type   = struct type t = string let t = Data end
   module List(T: Type) : Type = struct type t = T.t array let t = List T.t end
-  module Struct(T: Struct) : Type = struct type t = T.t s c let t = Ptr T.t end
 end
