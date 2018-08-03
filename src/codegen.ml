@@ -27,9 +27,12 @@ let comment comment fmt =
 let statement_open name fmt =
   fprintf fmt "open %s@ " name; fmt
 
+let interface_method iface a b name id fmt = 
+  fprintf fmt "@ @[let %s = defmethod %s %s %s %d %S @]" name iface a b id name; fmt
+
 
 let import_from_head name fmt =
-  fprintf fmt "@ type t = Self.%s.t@ let  t = Self.%s.t" name name; fmt
+  fprintf fmt "@ include (Self.%s : Type with type t = Self.%s.t)" name name; fmt
 
 let open_head fmt = 
   fprintf fmt "@ @[@[<v 2>module Self = struct"; fmt
@@ -41,7 +44,7 @@ let close_body fmt =
   fprintf fmt "@ @]"; fmt
 
 let open_module name fmt =
-  fprintf fmt "@ @[@[<hov 2>module %s = struct" name; fmt
+  fprintf fmt "@ @[@[<v 2>module %s = struct" name; fmt
 
 let open_body_module name fmt =
   fprintf fmt "@ @ @[<v>@[<v 2>module %s = struct" name; fmt
@@ -50,7 +53,7 @@ let structure_type dwords pwords fmt =
   fprintf fmt "@ @[type t'@ type t = t' sgu let t : t g@ =@ sg %d %d@]" dwords pwords; fmt
 
 let interface_type id fmt =
-  fprintf fmt "@ @[type t@ let t : t ig@ =@ ig 0x%LxL@]" id; fmt
+  fprintf fmt "@ @[type t'@ type t = t' i let t : t g@ =@ ig 0x%LxL@]" id; fmt
 
 let let_statement name expr fmt = 
   fprintf fmt "@ let %s = %s" name expr; fmt

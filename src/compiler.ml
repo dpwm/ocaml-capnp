@@ -110,6 +110,7 @@ let rec show_node_head (state:state) node =
         x => Node.NestedNode.id |> get_node |> 
         show_node_head (x => Node.NestedNode.name |> String.capitalize_ascii |> sanitize_name |> push_path state) |> pop_path)) in
 
+
       let state = s => Node.Struct.fields |> (state |> Array.fold_left (fun state x -> 
         match x => Field.union with
         | Group g ->
@@ -356,11 +357,62 @@ let rec show_node_body (state:state) node =
 
       (* we also need to get any fields that represent groups *)
 
-  | Interface _ ->
+  | Interface i ->
       let name = node |> node_name in
       fmt |> 
       open_module name |> 
-      close_module
+      import_from_head qualified |> ignore;
+      (* There is absolutely no way that anything other than the method that
+       * they are assigned to can call the implicit method parameters. This
+       * means that we can define them here. They will have the name that
+       * capnproto gives them but with $ -> _ *)
+      let internal_node internal_nodes = function
+        | n when n => Node.scopeId = 0L ->
+            let name = n |> node_name |> String.map (function | '$' -> '_' | x -> x) in
+            (* By definition this type can have no sub-modules, so it's literally just fields. *)
+            fmt |> open_module name |> ignore;
+
+            (match n => Node.union with 
+            | Struct s ->
+                fmt |> structure_type (s => Node.Struct.dataWordCount) (s =>
+                Node.Struct.pointerCount) |> ignore;
+                s => Node.Struct.fields |> Array.iter (fun field -> 
+                  let open Field in
+                  match field_accessor get_node field with
+                  | Some accessor -> 
+                      let_statement (field => name |> sanitize_name) accessor fmt |> ignore;
+                  | None -> 
+                      ());
+            | _ -> 
+                failwith "Interface results and parameters must be structs");
+
+            fmt |> close_module |> ignore;
+            internal_nodes |> Int64Map.add (n => Node.id) name
+        | _ -> internal_nodes
+      in
+
+      let internal_map = i => Node.Interface.methods |> Array.fold_left (fun x n ->
+        let x = n => Method.paramStructType |> get_node |> internal_node x in
+        n => Method.resultStructType |> get_node |> internal_node x
+      ) Int64Map.empty in
+
+      let get_node_name x = 
+        try (Int64Map.find x internal_map |> Printf.sprintf "%s.t") 
+        with Not_found -> get_node x |> qualified_name get_node |> fst |> Printf.sprintf "Self.%s.t"
+      in
+
+      i => Node.Interface.methods |> Array.iteri (fun n m -> 
+        fmt |> interface_method 
+        "t"
+        (m => Method.paramStructType |> get_node_name) 
+        (m => Method.resultStructType |> get_node_name)
+        (m => Method.name |> sanitize_name)
+        n
+        |>
+        ignore 
+
+        );
+      close_module fmt;
 
   | Enum _ -> 
       fmt |>

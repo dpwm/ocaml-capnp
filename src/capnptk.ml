@@ -146,10 +146,18 @@ module Declarative = struct
     | Ptr : 'a g -> 'a c g
     | Text : string g
     | Data : string g
-    | Interface : (stored_interface array ref * Int64.t) -> 'a i g
+    | Interface : (stored_interface array ref * stored_method array ref * Int64.t) -> 'a i g
   and stored = Stored : ('a g * 'a) -> stored
   and stored_interface = StoredInterface : 'a i g -> stored_interface
   and 'a builder = Builder of 'a * stored array
+  and 
+  ('i, 'a, 'b) method_t = {
+    method_id: int;
+    method_name: string;
+    iface: 'i g; (* We need to know what the interface id is when we generate calls *)
+    request: 'a g;
+    response: 'b g;
+  } and stored_method = StoredMethod : ('i, 'a, 'b) method_t -> stored_method
 
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
 
@@ -160,15 +168,25 @@ module Declarative = struct
   type 'a ug = 'a s g
 
   let sg dsize psize = Ptr (Struct (dsize, psize))
-  let ig id = Interface (ref [||], id)
+  let ig id = Interface (ref [||], ref [||], id)
 
-  type ('i, 'a, 'b) method_t = {
-    method_id: int;
-    method_name: string;
-    iface: 'i g; (* We need to know what the interface id is when we generate calls *)
-    request: 'a g;
-    response: 'b g;
-  }
+  (* I don't think we actually need to have the interface be aware of the
+   * methods it holds. By making the default implementation an error we don't
+   * need to know. *)
+
+  (* It would be great if we could add an  *)
+  let defmethod : type t a b. t i g -> a s c g -> b s c g -> int -> string -> (t i, a s c, b s c) method_t =
+    fun iface request response method_id method_name -> 
+      let m = { method_id; method_name;  request; response;  iface } in
+      m
+ 
+
+
+
+  module type Type = sig
+    type t
+    val t : t g
+  end
 
   type ('s, 'a) field = 
     | Field of (int * int * 'a g * 'a option)
@@ -697,11 +715,6 @@ module Utils = struct
 
 end
 
-module type Type = sig
-  open Declarative
-  type t
-  val t : t g
-end
 
 
 module Functors = struct
@@ -720,4 +733,5 @@ module Functors = struct
   module Text : Type   = struct type t = string let t = Data end
   module Data : Type   = struct type t = string let t = Data end
   module List(T: Type) : Type = struct type t = T.t array let t = List T.t end
+  module Struct(T: Type) : Type = struct type t = T.t let t = T.t end
 end
