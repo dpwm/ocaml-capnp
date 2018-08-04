@@ -223,7 +223,7 @@ module Declarative = struct
     | Group (t, d) -> c |> cmap (push (0, t, d))
 
 
-  let pbuilder : type a. a s c g -> a s c builder = function
+  let openbuilder : type a. a s c g -> a s c builder = function
     | Ptr Struct (dwords, pwords) -> 
         let open Stream in
         let data = Array1.create int8_unsigned c_layout ((dwords + pwords) * 8) in
@@ -231,7 +231,6 @@ module Declarative = struct
         let ptrs = Array.make pwords (Stored (Void, ())) in
         Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, ptrs)
     | _ -> failwith "Builder must be given a struct."
-  let openbuilder t = (Ptr t) |> pbuilder
 
   let write_list_ptr offset typ nelem s =
     s |> 
@@ -350,7 +349,7 @@ module Declarative = struct
       ), (n + 1)
     )) |> fst
 
-  let build f t = t |> openbuilder |> f |> closebuilder
+  let build t f = t |> openbuilder |> f |> closebuilder
 
 
   let ug f g = Group (Union (f, g), None)
@@ -625,47 +624,6 @@ module Declarative = struct
   let (=<) = set
 end
 
-module Rpc = struct
-  open Declarative
-
-  type client
-  type 'a implementation = Implemention of 'a i g
-
-  (* A server is a collection of implementations *)
-  module Int = struct
-    type t = int
-    let compare a b = b - a
-  end
-
-  module IntMap = Map.Make(Int)
-
-  type imethod
-
-  type 'a ibuilder = {
-    interface: 'a;
-    methods : imethod IntMap.t;
-  }
-
-  let declare : type a b. ('i g, a g, b g) method_t -> (a -> b) -> 'i ibuilder -> 'i ibuilder =
-    fun _ _ _ ->
-      failwith "foo"
-
-  let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> a implementation = 
-    fun x _ ->
-      match x with 
-      | Interface _ -> failwith "foo"
-      | _ -> failwith "Must be an interface"
-
-  let connect_pipe _ =
-    ()
-
-
-
-  let call : type a b. ('i g, a g, b g) method_t -> a -> client -> b =
-    fun _ _ _ ->
-      failwith "connection failure"
-
-end
 
 module Utils = struct
   open Bigarray
