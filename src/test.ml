@@ -1,46 +1,19 @@
-open Test_schema
-open Capnptk.Declarative
-
-let build = build LinkedList.t
-
-let rec build_list n =
-  build (fun x ->
-    x |> set LinkedList.payload (Int64.of_int n) |>
-    (match n with 
-    | 0 -> set LinkedList.union End
-    | n -> set LinkedList.union (Cons (build_list (n-1)))))
-
-(* let foo = 
-  build_list 10000 |> msg |> stream_data |> Capnptk.Utils.to_string |> Printf.printf "%s";
+let () =
+  let open Capnptkrpc in
+  let open Capnptk.Declarative in
+  let open Test_schema in
+  let open Lwt.Infix in
+  let implementation = implement LLServer.t (
+    fun x -> x |> 
+    declare LLServer.get (fun _ -> 
+      set LinkedList.union End |> build LinkedList.t |> Lwt.return
+    )) in
+  let _server = [| implementation |] |> server in
+  let call = build Rpc.Call.t (fun x -> x |> set Rpc.Call.interfaceId 0xb64ac9176c9ee8dfL |> set Rpc.Call.params (build Rpc.Payload.t (fun x -> x))) in
+  Printf.printf "0x%Lx\n" (call => Rpc.Call.interfaceId);
+  dispatch _server call >>= (fun x -> 
+    let x = x |> cast (Ptr Void) (LinkedList.t) in
+    x => LinkedList.union |> ignore;
+    Lwt.return ()
+  ) |> ignore;
   ()
-  *)
-
-let foo () = 
-  let rec follow node =
-    match node => LinkedList.union with
-    | Cons x -> follow x;
-    | End -> ();
-  in
-  let x = Capnptk.Utils.from_stdin () |> 
-  Capnptk.Utils.decode LinkedList.t in
-  for _ = 0 to 1000 do
-    follow x;
-  done
-
-module Test_schema = Test_schema_.Make(Capnp.BytesMessage)
-
-let bar () =
-  let rec follow node =
-    match Test_schema.Reader.LinkedList.get node with
-    | Cons node -> follow node
-    | End -> ()
-  in
-
-  let root_struct = Capnp_unix.IO.read_single_message_from_channel ~compression:`None stdin |> (function | Some x -> x | None -> failwith "no msg") |> Test_schema.Reader.LinkedList.of_message in
-
-  for _ = 0 to 1000 do
-    follow root_struct;
-  done
-
-
-let () = bar ()

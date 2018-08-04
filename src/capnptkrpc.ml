@@ -16,44 +16,45 @@ type imethod = IMethod : ('i, 'a, 'b) method_t * ('a -> 'b Lwt.t) -> imethod
 
 type 'a ibuilder = {
   interface: 'a i g;
-  methods : imethod IntMap.t Int64Map.t;
+  methods : imethod IntMap.t
 }
-type 'a implementation = Implementation of 'a ibuilder 
+
+type implementation = Implementation : 'a ibuilder  -> implementation
+
 let declare : 
-  type a b. ('i, a, b) method_t -> (a -> b Lwt.t) -> 'i ibuilder -> 'i ibuilder =
+  type a b. ('i i, a, b) method_t -> (a -> b Lwt.t) -> 'i ibuilder -> 'i ibuilder =
     fun m f b ->
-      let interface_id = match m.iface with 
-      | Interface (_,_,id) -> id 
-      | _ -> failwith "Expected interface." in
 
       let m' = IMethod(m, f) in
+      let methods = b.methods |> IntMap.add m.method_id m' in
+      {b with methods}
 
-      let methods = b.methods |> Int64Map.update interface_id (fun x ->
-        let base = match x with
-        | Some x -> x
-        | None -> IntMap.empty
-      in
-      Some (base |> IntMap.add m.method_id m'))
-    in
-
-    {b with methods}
-
-let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> a implementation = 
+let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> implementation = 
   fun interface f ->
     match interface with 
-    | Interface _ -> Implementation ({interface; methods=Int64Map.empty} |> f)
+    | Interface _ -> Implementation ({interface; methods=IntMap.empty} |> f)
     | _ -> failwith "Must be an interface"
 
-let dispatch : 'a implementation -> int64 -> int -> Rpc.Message.t c -> Rpc.Message.t c Lwt.t =
-  fun impl iid mid msg -> 
-    impl |> ignore;
-    iid |> ignore;
-    mid |> ignore;
-    msg |> ignore;
-    failwith "not implement"
+
+type server = implementation Int64Map.t
+
+let server (xs : implementation array) = 
+  xs |> (Int64Map.empty |> Array.fold_left (fun xs x -> 
+    let Implementation b = x in
+    let id = match b.interface with 
+    | Interface (_, _, id) -> id
+    | _ -> failwith "Not an interface." in
+    Int64Map.add id x xs))
 
 
+let dispatch : server -> Rpc.Call.t -> unit c Lwt.t =
+  fun server call -> 
+    server |> Int64Map.find (call => Rpc.Call.interfaceId) |> fun (Implementation iface) -> 
+      let (IMethod (m, f)) = iface.methods |> IntMap.find (call => Rpc.Call.methodId) in
+      let%lwt v = call => Rpc.Call.params => Rpc.Payload.content |> (cast (Ptr Void) m.request) |> f in
+      v |> cast m.response (Ptr Void) |> Lwt.return
 
+    
 
 let call : type a b. ('i g, a g, b g) method_t -> a -> client -> b =
   fun _ _ _ ->

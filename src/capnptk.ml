@@ -23,6 +23,7 @@ module Stream = struct
   let map3 f c = c |> pop3 |> (fun (a, c) -> c |> push (f a))
   let map4 f c = c |> pop4 |> (fun (a, c) -> c |> push (f a))
   let setval result c = {c with result}
+  let setpos pos c = {c with pos}
   let id x = x
 
   let read_n read c =
@@ -337,8 +338,11 @@ module Declarative = struct
             blit d2_data d1_data;
             s |> cmap (d2_data |> dim |> mov);
 
-        | Ptr Void -> s
-        | Void -> s
+        | Ptr Void -> 
+            Printf.printf "I am here!\n";
+            s
+        | Void -> 
+            s
 
         | Text ->
             s' |> cmap (fun s -> s |> write_list_ptr offset 2 (1 + String.length v)) |> ignore;
@@ -347,7 +351,7 @@ module Declarative = struct
         | _ -> failwith "match failure."
 
       ), (n + 1)
-    )) |> fst
+    )) |> fst |> cmap (setpos 0)
 
   let build t f = t |> openbuilder |> f |> closebuilder
 
@@ -479,18 +483,17 @@ module Declarative = struct
       | PtrField (_, t, _) -> t
       | Group (t, _) -> t
 
-  let set_field_type t = function
-    | Field (a, b, _, _) -> Field (a, b, t, None)
-    | PtrField (a, _, _) -> PtrField (a, t, None)
-    | Group (_, _) -> Group (t, None)
-
-  (* We don't cast values, we cast addresses. *)
-  let cast : type a b s. b g -> (s, a) field  -> (s, b) field =
-    fun t2 field -> 
-      let t1 = get_field_type field in
+  (* Recall that a cast can only take place between pointer types. List is complicated, but do-able. *)
+  let cast : type a b. a g -> b g -> a -> b =
+    fun t1 t2 -> 
       match (t1, t2) with
-      | (Ptr Void, List _) -> field |> set_field_type t2
-      | (_, _) -> failwith "invalid cast"
+      | (Ptr Void, Ptr Struct _) -> 
+        cmap (setval Structured)
+      | (Ptr Struct _, Ptr Void) -> 
+        cmap (setval ())
+      | _ -> failwith "unsupported cast"
+
+
 
   let rec show : type a. a g -> string = function
     | UInt64 -> "UInt64"
