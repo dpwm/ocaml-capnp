@@ -38,6 +38,8 @@ let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> implementation =
 
 type server = implementation Int64Map.t
 
+let interface_id = function | Interface(_, _, id) -> id | _ -> failwith "Not interface"
+
 let server (xs : implementation array) = 
   xs |> (Int64Map.empty |> Array.fold_left (fun xs x -> 
     let Implementation b = x in
@@ -51,12 +53,25 @@ let dispatch : server -> Rpc.Call.t -> unit c Lwt.t =
   fun server call -> 
     server |> Int64Map.find (call => Rpc.Call.interfaceId) |> fun (Implementation iface) -> 
       let (IMethod (m, f)) = iface.methods |> IntMap.find (call => Rpc.Call.methodId) in
-      let%lwt v = call => Rpc.Call.params => Rpc.Payload.content |> (cast (Ptr Void) m.request) |> f in
-      v |> cast m.response (Ptr Void) |> Lwt.return
+      let%lwt v = call => Rpc.Call.params => (cast_field Rpc.Payload.content m.request) |> f in
+      v |> cast_struct m.response (Ptr Void) |> Lwt.return
+
+(* Functions can be composed *)
 
     
+let make_call : type a b. ('i, a, b) method_t -> a -> Rpc.Call.t =
+  fun m x ->
+    build Rpc.Call.t (fun b -> b |>
+    set Rpc.Call.methodId m.method_id |>
+    set Rpc.Call.interfaceId (m.iface |> interface_id) |>
+    set Rpc.Call.params (build Rpc.Payload.t 
+      (set (cast_field Rpc.Payload.content m.request) x)
+    ))
 
-let call : type a b. ('i g, a g, b g) method_t -> a -> client -> b =
+
+
+let call : type a b. ('i g, a g, b g) method_t -> a -> client -> b Lwt.t =
   fun _ _ _ ->
+    (* Basically prepare a call, send it, *)
     failwith "connection failure"
 

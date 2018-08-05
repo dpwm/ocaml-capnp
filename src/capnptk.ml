@@ -1,11 +1,14 @@
 exception OrdinalError of int
 
+
 module Stream = struct
   type ('data, 'a) t = { data : 'data; pos : int;  result : 'a }
   (* A very simple (read dangerous) stack based bytestream reader / writer *)
   let pop {result=(a, _); _} = a
   let popr c = {c with result=(snd c.result)}
 
+  type _data = (int, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+  external get_64 : _data -> int -> int64 = "%caml_bigstring_get64"
   let map f c = {c with result = f c.result}
 
   let round_up d n = (((n - 1) / d) + 1) * d
@@ -42,9 +45,7 @@ module Stream = struct
   let read_int8 c = c |> push c.data.{c.pos} |> mov 1
   let read_int16 c = c |> read_int8 |> read_int8 |> map2 (fun (a, b) -> a lor (b lsl 8))
   let read_int32 c = c |> read_int16 |> read_int16 |> map2 (fun (a, b) -> Int32.(logor (of_int a) (shift_left (of_int b) 16)))
-  let read_int64 c = c |> read_int16 |> read_int16 |> read_int16 |> read_int16 |> map4 (fun (a, b, c, d) -> Int64.(
-    logor (logor (of_int a) (shift_left (of_int b) 16)) (logor (shift_left (of_int c) 32) (shift_left (of_int d) 48) )
-    ))
+  let read_int64 c = let result = get_64 c.data c.pos in {c with pos=c.pos + 8; result=(result, c.result)}
 
   let write_int8 c = c |> pop1 |> fun (x, c) -> c.data.{c.pos} <- x; c |> mov 1
   let write_int16 c = c |> pop1 |> fun (x, c) -> c |> push (x land 0xff) |> write_int8 |> push ((x lsr 8) land 255) |> write_int8
@@ -258,6 +259,19 @@ module Declarative = struct
     write_bits64u 48 16 |>
     write_int64
 
+
+  let write_ptr ptr s1 s2 =
+    let offset = ((s2.pos - s1.pos) / 8) - 1 in
+    match ptr with
+    | NullPtr -> (s1 |> push 0L |> write_int64), s2
+    | StructPtr {dwords; pwords} -> (write_struct_ptr offset dwords pwords s1), s2
+    | ListPtr {typ; nelem} -> (write_list_ptr offset typ nelem s1), s2
+    | CompositeListPtr ({typ; nelem}, {dwords; pwords}) ->
+        let s1 = write_list_ptr offset typ (nelem * (dwords + pwords)) s1 in
+        let s2 = write_struct_ptr nelem dwords pwords s2 in
+        s1, s2
+    | CapabilityPtr _  -> failwith "capability pointer failure"
+
   type 'a stream = Stream of 'a c
   let stream_data (Stream c) = c.stream.data
 
@@ -304,7 +318,7 @@ module Declarative = struct
     v |> ((s_alloc, 0) |> Array.fold_left (fun (s, n) x -> 
       let Stored (t,v) = x in
 
-      let s' = s0 |> mov_field (PtrField (n, t, None)) in
+      let s' = s0 |> mov_field (PtrField (n, t, None)) |> cmap popr in
       let offset = (s.stream.pos - s'.stream.pos - 8) / 8 in
 
       (match t with
@@ -314,7 +328,7 @@ module Declarative = struct
 
             let wcount = (dwords + pwords) * nelem in
 
-            s' |> cmap (fun s -> s |> popr |> write_list_ptr offset 7 wcount) |> ignore;
+            s' |> cmap (fun s -> s |> write_list_ptr offset 7 wcount) |> ignore;
 
             let s = s |> cmap (fun s -> s |> write_struct_ptr nelem dwords pwords) in
 
@@ -339,8 +353,13 @@ module Declarative = struct
             s |> cmap (d2_data |> dim |> mov);
 
         | Ptr Void -> 
-            Printf.printf "I am here!\n";
-            s
+            let open Array1 in
+            let _, stream = write_ptr v.ptr s'.stream s.stream in 
+            let d2_len = dim v.stream.data in
+            let d2_data = sub v.stream.data 0 d2_len in
+            let d1_data = sub stream.data stream.pos (dim d2_data) in
+            blit d2_data d1_data;
+            {s with stream} |> cmap (d2_data |> dim |> mov)
         | Void -> 
             s
 
@@ -358,19 +377,24 @@ module Declarative = struct
 
   let ug f g = Group (Union (f, g), None)
 
+  let is_ptr_typ : type a. a g -> bool = function
+    | Ptr _  -> true
+    | List _ -> true
+    | Text  -> true
+    | Data -> true
+    | _ -> false
+
+
+
   let field : type st t. st c g -> t g -> ?default:t -> Int32.t -> (st, t) field =
     fun _ t ?default offset ->
       let ptrfield = 
         let b = Int32.(to_int offset) in
         PtrField (b, t, default)
       in
-      match t with 
-      | Ptr _  -> ptrfield
-      | List _ -> ptrfield
-      | Text  -> ptrfield
-      | Data -> ptrfield
-
-      | _ -> 
+      match is_ptr_typ t with 
+      | true -> ptrfield
+      | false -> 
         let b8 = Int32.(shift_right_logical offset 3) in
         let b = Int32.(sub offset (shift_left b8 3) |> to_int) in
         let b8 = Int32.to_int b8 in
@@ -484,7 +508,17 @@ module Declarative = struct
       | Group (t, _) -> t
 
   (* Recall that a cast can only take place between pointer types. List is complicated, but do-able. *)
-  let cast : type a b. a g -> b g -> a -> b =
+  (* This is problematic. Really we need to think about this. *)
+  (* In order to turn an anyptr into a list, we need to *)
+  (* It might be easier to cast the references, given everything must be in a struct anyway. *)
+
+  let cast_field : type a b. ('s, a) field -> b g -> ('s, b) field =
+    fun field t ->
+      match field, is_ptr_typ t with
+      | PtrField (i, _, _), true -> PtrField (i, t, None)
+      | _ -> failwith "cannot cast data or group field."
+
+  let cast_struct : type a b. a g -> b g -> a -> b =
     fun t1 t2 -> 
       match (t1, t2) with
       | (Ptr Void, Ptr Struct _) -> 
@@ -589,7 +623,10 @@ module Declarative = struct
               cmap (setval Structured)
             in
 
-            c |> ensure_struct_ptr |> ignore;
+            (match c.ptr with
+            | StructPtr _  -> ()
+            | NullPtr -> ()
+            | _ -> failwith "Not a struct or null ptr");
             c
 
         | Struct _ -> 

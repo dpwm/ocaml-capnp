@@ -9,10 +9,12 @@ let () =
       set LinkedList.union End |> build LinkedList.t |> Lwt.return
     )) in
   let _server = [| implementation |] |> server in
-  let call = build Rpc.Call.t (fun x -> x |> set Rpc.Call.interfaceId 0xb64ac9176c9ee8dfL |> set Rpc.Call.params (build Rpc.Payload.t (fun x -> x))) in
-  Printf.printf "0x%Lx\n" (call => Rpc.Call.interfaceId);
+  let call = make_call LLServer.get (build LLServer.Get_Params.t (fun x -> x))  in
+
+  call |> msg |> stream_data |> Capnptk.Utils.to_string |> Printf.printf "%s";
+
   dispatch _server call >>= (fun x -> 
-    let x = x |> cast (Ptr Void) (LinkedList.t) in
+    let x = x |> cast_struct (Ptr Void) (LinkedList.t) in
     x => LinkedList.union |> ignore;
     Lwt.return ()
   ) |> ignore;
