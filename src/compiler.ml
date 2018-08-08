@@ -159,7 +159,7 @@ let ocaml_literal value =
   let fmt = Printf.sprintf in
   match value => Value.union with
   | Void -> None
-  | Bool v -> if v then Some "true" else None
+    | Bool v -> if v then Some "true" else None
   | Int8 v | Int16 v | Uint8 v | Uint16 v ->
       if v = 0 then None else Some (fmt "%d" v)
   | Int32 v | Uint32 v ->
@@ -259,7 +259,7 @@ let field_accessor get_node field =
     | Slot slot -> 
         let default = slot => Field.Slot.defaultValue |> ocaml_literal in
         let default = match default with 
-        | Some d -> Printf.sprintf " ~default:(%s)" d
+        | Some d -> Printf.sprintf " ~default:%s" d
         | None -> ""
         in
         Some (Printf.sprintf "field t %s%s %ldl" 

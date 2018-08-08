@@ -89,6 +89,8 @@ module Stream = struct
     c |> read_bits64u a b |> pop2 |> fun ((x, y), c) -> c |> push (unsigned_to_signed b x) |> push y
 
 end
+
+
 module Declarative = struct
 
   open Bigarray
@@ -141,7 +143,7 @@ module Declarative = struct
     | Float64 : float g
     | Float32 : float g
 
-    | Struct : int * int -> 'a s g
+    | Struct : int * int * int array -> 'a s g
     | Union : ('b s c -> 'a) * ('b s c builder -> 'a -> 'b s c builder) -> 'a g
     | Enum : (int -> 'a) * ('a -> int) -> 'a g
     | List : 'a g -> 'a array g
@@ -164,20 +166,23 @@ module Declarative = struct
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
 
 
+
+
   type 'a sg = 'a s c g
-  type 'a ig = 'a i g
+  type 'a ig = 'a i c g
   type 'a sgu = 'a s c
+  type 'a igu = 'a i c
   type 'a ug = 'a s g
 
-  let sg dsize psize = Ptr (Struct (dsize, psize))
-  let ig id = Interface (ref [||], ref [||], id)
+  let sg dsize psize = Ptr (Struct (dsize, psize, Array.make (8 * (dsize + psize)) 0))
+  let ig id = Ptr (Interface (ref [||], ref [||], id))
 
   (* I don't think we actually need to have the interface be aware of the
    * methods it holds. By making the default implementation an error we don't
    * need to know. *)
 
   (* It would be great if we could add an  *)
-  let defmethod : type t a b. t i g -> a s c g -> b s c g -> int -> string -> (t i, a s c, b s c) method_t =
+  let defmethod : type t a b. t i c g -> a s c g -> b s c g -> int -> string -> (t i c, a s c, b s c) method_t =
     fun iface request response method_id method_name -> 
       let m = { method_id; method_name;  request; response;  iface } in
       m
@@ -226,9 +231,10 @@ module Declarative = struct
 
 
   let openbuilder : type a. a s c g -> a s c builder = function
-    | Ptr Struct (dwords, pwords) -> 
+    | Ptr Struct (dwords, pwords, _) -> 
         let open Stream in
         let data = Array1.create int8_unsigned c_layout ((dwords + pwords) * 8) in
+        Array1.fill data 0;
         let stream = {data; pos=0; result=Structured} in
         let ptrs = Array.make pwords (Stored (Void, ())) in
         Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, ptrs)
@@ -273,7 +279,7 @@ module Declarative = struct
     | CapabilityPtr _  -> failwith "capability pointer failure"
 
   type 'a stream = Stream of 'a c
-  let stream_data (Stream c) = c.stream.data
+  let msg_data (Stream c) = c.stream.data
 
   let msg : 'a c -> 'a stream = fun s ->
     let open Array1 in
@@ -308,6 +314,7 @@ module Declarative = struct
     let open Bigarray in
     let m = (s.stream.data |> Array1.dim) in
     let data = Array1.create int8_unsigned c_layout (n + m) in
+    Array1.fill data 0;
 
     Array1.(blit s.stream.data (sub data 0 m));
 
@@ -322,7 +329,7 @@ module Declarative = struct
       let offset = (s.stream.pos - s'.stream.pos - 8) / 8 in
 
       (match t with
-        | List Ptr (Struct (dwords, pwords)) ->
+        | List Ptr (Struct (dwords, pwords, _)) ->
             (* We want to write the object type *)
             let nelem = Array.length v in
 
@@ -343,7 +350,7 @@ module Declarative = struct
 
 
 
-        | Ptr Struct (dwords, pwords) ->
+        | Ptr Struct (dwords, pwords, _) ->
             s' |> cmap (fun s -> s |> write_struct_ptr offset dwords pwords) |> ignore;
             let open Array1 in
             let d2_len = dim v.stream.data in
@@ -396,7 +403,7 @@ module Declarative = struct
       | true -> ptrfield
       | false -> 
         let b8 = Int32.(shift_right_logical offset 3) in
-        let b = Int32.(sub offset (shift_left b8 3) |> to_int) in
+        let b = Int32.(logand b8 7l |> to_int ) in
         let b8 = Int32.to_int b8 in
         Field (b8, b, t, default)
 
@@ -471,6 +478,12 @@ module Declarative = struct
 
     in
     c.stream |> read_ptr |> pop1 |> fun ((_, ptr), stream) -> {c with ptr; stream}
+
+  let get_interface_capability : _ i c -> int32 = 
+    fun c ->
+      match (c |> c_read_ptr).ptr with
+      | CapabilityPtr x -> x |> Int32.of_int
+      | _ -> failwith "Not a capability pointer."
     
 
   let set : type a s.  (s, a) field -> a -> s c builder -> s c builder = 
@@ -481,7 +494,7 @@ module Declarative = struct
       let (n, t, _), stream = c.stream |> pop1 in
 
       (match t with
-      | UInt64 -> stream |> push v |> write_int64
+      | UInt64 -> stream |> push v |> write_int64 (* NO! *)
       | Int64 -> stream |> push v |> write_int64
       | UInt32 -> stream |> push v |> write_int32
       | Int32 -> stream |> push v |> write_int32
@@ -589,7 +602,7 @@ module Declarative = struct
         | Float32 -> stream |> read_int32 |> pop |> mapDefault (mapSome Int32.bits_of_float default) (Int32.logxor) |> Int32.float_of_bits
         | Float64 -> stream |> read_int64 |> pop |> mapDefault (mapSome Int64.bits_of_float default) (Int64.logxor) |> Int64.float_of_bits
         | Void -> ()
-        | Bool -> stream |> read_int8 |> pop |> (lsr) b |> (land) 1 |> (function | 0 -> false | _ -> true)
+        | Bool -> stream |> read_int8 |> pop |> (lsr) b |> (land) 1 |> (function | 0 -> false | _ -> true) |> (match default with Some true -> (not) | _ -> (fun x -> x))
         | Data -> ""
         | List Ptr (Struct _) -> 
             let c = c |> c_read_ptr in
@@ -688,6 +701,7 @@ module Utils = struct
     let n = f 0 in
     Array1.sub a 0 n
 
+
   open Declarative 
   let cursor data = 
     {data; pos=0; result=()}
@@ -702,14 +716,27 @@ module Utils = struct
         let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
         {stream; ptr=NullPtr; sections} |> c_read_ptr |> get (Group (t, None))
 
-    let to_string x = 
-      let open Bigarray in
-      let n = Array1.dim x in
-      let b = Bytes.create n in
-      for i = 0 to n-1 do
-        Bytes.set b i (Char.chr x.{i})
-      done;
-      Bytes.unsafe_to_string b
+  let to_bytes x = 
+    let open Bigarray in
+    let n = Array1.dim x in
+    let b = Bytes.create n in
+    for i = 0 to n-1 do
+      Bytes.set b i (Char.chr x.{i})
+    done;
+    b
+
+  let to_string x = 
+    x |> to_bytes |> Bytes.unsafe_to_string
+
+  let struct_to_string : type a. a s c -> string =
+    let open Declarative in
+    fun x ->
+      x |> msg |> msg_data |> to_string
+
+  let struct_to_bytes : type a. a s c -> _ =
+    let open Declarative in
+    fun x ->
+      x |> msg |> msg_data 
 
 end
 

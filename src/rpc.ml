@@ -195,13 +195,13 @@ module Return = struct
       | AcceptFromThirdParty v -> b |> set (field t (Ptr Void) 0l) v |> set union_tag 5
     in ug f g
   let answerId = field t UInt32 0l
-  let releaseParamCaps = field t Bool 32l
+  let releaseParamCaps = field t Bool ~default:true 32l
 end
 
 module Finish = struct
   include (Self.Finish : Type with type t = Self.Finish.t)
   let questionId = field t UInt32 0l
-  let releaseResultCaps = field t Bool 32l
+  let releaseResultCaps = field t Bool ~default:true 32l
 end
 
 module Resolve = struct
