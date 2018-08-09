@@ -119,10 +119,10 @@ let server (xs : implementation array) =
 
 type ('a, 'p) chainable = 'a Lwt.t * int32 * 'p peer * Rpc.PromisedAnswer.Op.union list
 
-let chainable_map : ('a -> 'b) -> ('a, 'p) chainable ->  ('b, 'p) chainable = 
+let chainable_map : ('a -> 'b) -> ('a, 'p) chainable ->  ('b, 'p) chainable Lwt.t = 
   fun f (x, n, p, ops) -> 
   let open Lwt.Infix in
-  (x >>= (fun x -> Lwt.return (f x)), n, p, ops)
+  Lwt.return (x >>= (fun x -> Lwt.return (f x)), n, p, ops)
 
 
 let inc_ref xs k = 
@@ -135,6 +135,11 @@ let inc_ref xs k =
 
   
  
+let set_caps caps c =
+  {c with caps=caps |> Array.map (cast_struct (Rpc.CapDescriptor.t)  (Ptr Void))}
+
+let get_caps c =
+  c.caps |> Array.map (cast_struct (Ptr Void) (Rpc.CapDescriptor.t))
 
 let process_return : type t. t c g -> _ peer -> Rpc.Return.t -> t c Lwt.t =
   fun typ peer answer ->
@@ -143,23 +148,25 @@ let process_return : type t. t c g -> _ peer -> Rpc.Return.t -> t c Lwt.t =
     | Results payload -> 
         (* There may be capabilties to insert into the table. *)
 
+        let caps = payload => Rpc.Payload.capTable in
+
         (payload => Rpc.Payload.capTable |> Array.iter (
           fun x -> 
             match x => Rpc.CapDescriptor.union with
+          | None -> ()
           | SenderHosted id ->
               peer.imports <- inc_ref peer.imports id
-          | None -> ()
           | _ ->
               failwith "foo"
         ));
 
-        Lwt.return (payload => (cast_field Rpc.Payload.content typ))
+        Lwt.return (payload => (cast_field Rpc.Payload.content typ) |> set_caps caps)
     | Exception e ->
         failwith (e => Rpc.Exception.reason)
     | _ -> failwith "not recog"
   (* Process a return *)
 
-let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p) chainable = 
+let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p) chainable Lwt.t = 
   fun msg typ peer ->
     (* Fire a question, register a resolver in the question table. *)
     let question_id = peer.question_id in
@@ -176,12 +183,12 @@ let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p)
     (* Prepare a future for the result *)
 
     let len = (Lwt_bytes.length msg) in
-    Lwt_bytes.send peer.fd msg 0 len [] |> ignore;
-    (Lwt.bind promise (process_return typ peer), question_id, peer, [])
+    let%lwt _ = Lwt_bytes.send peer.fd msg 0 len [] in
+    (Lwt.bind promise (process_return typ peer), question_id, peer, []) |> Lwt.return
 
 
 
-let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable =
+let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable Lwt.t =
   fun t peer -> 
     let msg question_id = build Rpc.Message.t (
       set Rpc.Message.union (
@@ -215,7 +222,7 @@ let make_call : type a b. ('i, a, b) method_t -> a -> Rpc.MessageTarget.union ->
     )))))
 
 
-let call : type a b. ('i, a s c, b s c) method_t -> a s c -> ('i, 'p) chainable -> (b s c, 'p) chainable =
+let call : type a b. ('i, a s c, b s c) method_t -> a s c -> ('i, 'p) chainable -> (b s c, 'p) chainable Lwt.t =
   fun m x (promise,qid,peer,ops) ->
     ops |> ignore;
     (* Basically prepare a call, send it, *)
@@ -225,15 +232,20 @@ let call : type a b. ('i, a s c, b s c) method_t -> a s c -> ('i, 'p) chainable 
         (ops |> List.map (fun z -> build Op.t (set Op.union z)) |> List.rev |> Array.of_list |> set transform )
         )))) m.response peer
     | Return v -> 
-        
-        question (make_call m x (ImportedCap (v |> get_interface_capability))) m.response peer
+        let n = v |> get_interface_capability |> Int32.to_int in
+        (match (v |> get_caps).(n) => Rpc.CapDescriptor.union with
+        | SenderHosted n -> 
+            question (make_call m x (ImportedCap n)) m.response peer
+        | _ -> failwith "does it?")
     | _ -> failwith "not expected"
 
 let push_op x (a, b, c, d) = (a, b, c, x :: d)
 
-let csync (a, b, c, d) = (a, b, c, d)
+let csync (a, b, c, d) =
+  let open Lwt.Infix in
+  a >>= (fun _ -> Lwt.return (a, b, c, d))
 
-let ptrField : ('s, 'a) field -> ('s c, 'p) chainable -> ('a, 'p) chainable =
+let ptrField : ('s, 'a) field -> ('s c, 'p) chainable -> ('a, 'p) chainable Lwt.t =
   fun field chain ->
     match field with 
     | PtrField (n, _, _) -> chain |> push_op (Rpc.PromisedAnswer.Op.GetPointerField n) |> chainable_map (get field)

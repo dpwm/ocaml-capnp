@@ -125,6 +125,7 @@ module Declarative = struct
   type 'a c = {
     stream : (data, 'a) Stream.t;
     ptr : ptr;
+    caps : (unit c) array ;
     sections : int array;
   } and
   'a g =
@@ -237,7 +238,7 @@ module Declarative = struct
         Array1.fill data 0;
         let stream = {data; pos=0; result=Structured} in
         let ptrs = Array.make pwords (Stored (Void, ())) in
-        Builder ({stream; ptr=StructPtr {dwords; pwords}; sections=[||]}, ptrs)
+        Builder ({stream; ptr=StructPtr {dwords; pwords}; caps=[||]; sections=[||]}, ptrs)
     | _ -> failwith "Builder must be given a struct."
 
   let write_list_ptr offset typ nelem s =
@@ -482,7 +483,8 @@ module Declarative = struct
   let get_interface_capability : _ i c -> int32 = 
     fun c ->
       match (c |> c_read_ptr).ptr with
-      | CapabilityPtr x -> x |> Int32.of_int
+      | CapabilityPtr x -> 
+          x |> Int32.of_int
       | _ -> failwith "Not a capability pointer."
     
 
@@ -660,6 +662,8 @@ module Declarative = struct
                 [| |]
             | _ -> [| |])
 
+        | Ptr (Interface _) ->
+            c |> cmap (setval (Interfaced))
 
         | t -> failwith (Printf.sprintf "Could not match: %s" (show t))
 
@@ -714,7 +718,7 @@ module Utils = struct
       pop1 |> fun (sections, stream) -> 
         let pos = ref (stream.pos / 8) in
         let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
-        {stream; ptr=NullPtr; sections} |> c_read_ptr |> get (Group (t, None))
+        {stream; ptr=NullPtr; sections; caps=[||]} |> c_read_ptr |> get (Group (t, None))
 
   let to_bytes x = 
     let open Bigarray in
