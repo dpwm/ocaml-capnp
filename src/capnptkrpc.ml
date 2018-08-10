@@ -32,6 +32,7 @@ type 'a ibuilder = {
 
 type implementation = Implementation : 'a ibuilder  -> implementation
 
+
 let declare : 
   type a b. ('i i c, a, b) method_t -> (a -> b Lwt.t) -> 'i ibuilder -> 'i ibuilder =
     fun m f b ->
@@ -39,6 +40,19 @@ let declare :
       let m' = IMethod(m, f) in
       let methods = b.methods |> IntMap.add m.method_id m' in
       {b with methods}
+
+(* We need some way to return an implementation. This will be done by exporting
+ * an id. We will need a mapping from those capability ids to the actual
+ * capability.  Note that a capability can be a closure. This means that we
+ * don't need to use objects or any of that awful stuff. *)
+(* An implementation must have type 'i. Simply, 'i implementation *)
+
+(* We need a way to return . So we need to make the types recursive. This is
+ * crucial. 
+ *
+ * We can instead use the
+ *
+ * *)
 
 let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> implementation = 
   fun interface f ->

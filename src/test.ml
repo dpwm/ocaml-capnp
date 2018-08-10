@@ -12,7 +12,7 @@ let () =
 
 
 
-    for%lwt i = 1 to 10000 do
+    for%lwt i = 1 to 10 do
       let fooserver = p |> bootstrap FooServer.t in
       let%lwt _ = fooserver >>=
       csync >>=
