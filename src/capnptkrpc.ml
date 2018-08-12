@@ -1,5 +1,14 @@
-
 open Capnptk.Declarative
+
+(* A server is a collection of implementations *)
+module Int = struct
+  type t = int
+  let compare a b = b - a
+end
+
+module IntMap = Map.Make(Int)
+module Int32Map = Map.Make(Int32)
+module Int64Map = Map.Make(Int64)
 
 type client
 
@@ -12,52 +21,81 @@ module Uint8Array1 = struct
   external to_bytes : t -> Lwt_bytes.t = "%identity"
 end
 
-(* A server is a collection of implementations *)
-module Int = struct
-  type t = int
-  let compare a b = b - a
-end
+
+(* The implementation table is *)
+(* Basically, an implementation can just be a pointer into the implementation
+ * table. When an export is made it is linked to the export table. *)
+
+(* So when a struct does the returning thing, it can be sure that there will be
+ * a suitable export. *)
+
+(* We **could** always require capabilities (implementations) to be defined
+ * SEPARATELY. However, this would be a bit of a pain. 
+ *
+ * The captable is not sufficient for this. 
+ *
+ * Instead we need a space for an implementation table to go. This is
+ * applicable to both "client" and "server" as both can actually hold this.
+ *
+ * *)
 
 
-module IntMap = Map.Make(Int)
-module Int32Map = Map.Make(Int32)
-module Int64Map = Map.Make(Int64)
+
+
 
 type imethod = IMethod : ('i, 'a, 'b) method_t * ('a -> 'b Lwt.t) -> imethod
 
 type 'a ibuilder = {
   interface: 'a i g;
-  methods : imethod IntMap.t
+  methods : method_m option array
 }
 
 type implementation = Implementation : 'a ibuilder  -> implementation
 
 
-let declare : 
+let wrap_method (type a') (type b') (m : (_, a', b')  method_t) (f0: a' -> b' Lwt.t) =
+  (* Produce a method first-class module *)
+  (module struct
+    type request = a'
+    type response = b'
+    type request_g = request g
+    type response_g = response g
+    type response_t = response Lwt.t
+
+    let request = m.request
+    let response = m.response
+    let call = f0
+  end : Method with 
+    type request = a' and
+    type response = b' and
+    type request_g = a' g and
+    type response_g = b' g and
+    type response_t = b' Lwt.t
+  )
+
+
+(* let declare : 
   type a b. ('i i c, a, b) method_t -> (a -> b Lwt.t) -> 'i ibuilder -> 'i ibuilder =
     fun m f b ->
+      b.methods.(0) <- Some (Method (wrap_method m f));
+      b 
+      *)
 
-      let m' = IMethod(m, f) in
-      let methods = b.methods |> IntMap.add m.method_id m' in
-      {b with methods}
-
-(* We need some way to return an implementation. This will be done by exporting
- * an id. We will need a mapping from those capability ids to the actual
- * capability.  Note that a capability can be a closure. This means that we
- * don't need to use objects or any of that awful stuff. *)
-(* An implementation must have type 'i. Simply, 'i implementation *)
-
-(* We need a way to return . So we need to make the types recursive. This is
- * crucial. 
+(* An implementation is going to take a struct and return a struct.  Each of
+ * these structs may contain capabilities. Each capability refers to an
+ * implementation. The *setting* of the .
  *
- * We can instead use the
+ * An implmentation is a capability and must have the same type (t i c). It is
+ * subject to reference counting.
+ *
+ *
  *
  * *)
 
 let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> implementation = 
   fun interface f ->
     match interface with 
-    | Interface _ -> Implementation ({interface; methods=IntMap.empty} |> f)
+    | Interface (_, n, _) -> Implementation ({interface; methods=Array.make n None} |> f)
     | _ -> failwith "Must be an interface"
 
 
@@ -67,7 +105,7 @@ type 'a peer = {
   mutable question_id : int32;
   mutable questions : Rpc.Return.t Lwt.u Int32Map.t;
   mutable imports : int Int32Map.t;
-  implementations : implementation Int64Map.t;
+  mutable exports : impl Int32Map.t;
   bootstrap : 'a i g option
 }
 
@@ -77,10 +115,10 @@ let peer () =
   let fd = socket PF_INET SOCK_STREAM 0 in
   let question_id = 0l in
   let questions = Int32Map.empty in
-  let implementations = Int64Map.empty in
+  let exports = Int32Map.empty in
   let imports = Int32Map.empty in
   let bootstrap = None in
-  { fd; question_id; questions; implementations; bootstrap; imports }
+  { fd; question_id; questions; exports; bootstrap; imports }
 
 let peer_connect peer = 
   let open Lwt_unix in
@@ -212,14 +250,29 @@ let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable Lwt.t =
 
 
 
-
 let dispatch : _ peer -> Rpc.Call.t -> unit c Lwt.t =
   fun server call -> 
-    server.implementations |> 
-    Int64Map.find (call => Rpc.Call.interfaceId) |> fun (Implementation iface) -> 
+    match call => Rpc.Call.target => Rpc.MessageTarget.union with
+    | ImportedCap c ->
+        let e = server.exports |> Int32Map.find c in
+        let module I = (val e) in
+        failwith ""
+        (* let iface = I.methods |> Int64Map.find (call => Rpc.Call.interfaceId) in
+        begin match iface.(call => Rpc.Call.methodId) with 
+        | Some Method m -> 
+          let module M = (val m) in
+
+          let v = call => Rpc.Call.params => (cast_field Rpc.Payload.content M.request) in 
+          Lwt.bind (M.call v) (fun x -> x |> cast_struct M.response (Ptr Void) |> Lwt.return)
+        | _ -> 
+        failwith "bar"
+        end
+        *)
+    | _ -> failwith "not supported yet"
+    (* |> fun (Implementation iface) -> 
       let (IMethod (m, f)) = iface.methods |> IntMap.find (call => Rpc.Call.methodId) in
       let%lwt v = call => Rpc.Call.params => (cast_field Rpc.Payload.content m.request) |> f in
-      v |> cast_struct m.response (Ptr Void) |> Lwt.return
+      v |> cast_struct m.response (Ptr Void) |> Lwt.return *)
 
 (* Functions can be composed *)
 

@@ -1,5 +1,8 @@
 exception OrdinalError of int
 
+(* This module should know absolutely NOTHING of Lwt. *)
+(* The only thing it should know of RPC is that there are interfaces and they have methods. *)
+(* Implementations should instead be a module. *)
 
 module Stream = struct
   type ('data, 'a) t = { data : 'data; pos : int;  result : 'a }
@@ -90,11 +93,13 @@ module Stream = struct
 
 end
 
+module Int64Map = Map.Make(Int64)
+
 
 module Declarative = struct
 
+
   open Bigarray
-  exception Error of string
 
   type data = (int, int8_unsigned_elt, c_layout) Array1.t
 
@@ -115,6 +120,26 @@ module Declarative = struct
     nelem : int;
   }
 
+  module type Method = sig
+    type request
+    type response
+    type response_g
+    type request_g
+    type response_t
+    val request : request_g
+    val response : response_g
+
+    val call : (request -> response_t)
+  end
+
+
+  module type Impl = sig
+    (* These types will be injected by the RPC layer *)
+    type t
+    val methods : t option array Int64Map.t 
+  end
+
+
   type ptr =
     | NullPtr 
     | StructPtr of struct_ptr
@@ -122,10 +147,26 @@ module Declarative = struct
     | CompositeListPtr of list_ptr * struct_ptr
     | CapabilityPtr of int
 
-  type 'a c = {
+  (* What does this module really need to know? *)
+  module type Impls = sig
+    type t (* the implementation type *)
+
+    (* This will allow adding of a new entry *)
+    val add : t -> int
+    val merge : t -> t -> int
+    (* All the other stuff, that is LWT aware, is hidden *)
+  end
+
+  type impl = (module Impl with type t = method_m)
+  and  method_m = Method : (
+    module Method with
+      type request = 'a and type request_g = 'a g and
+      type response = 'b and type response_g = 'b g) -> method_m
+  and 'a c = {
     stream : (data, 'a) Stream.t;
     ptr : ptr;
     caps : (unit c) array ;
+    impls : (module Impls with type t = stored_interface) option;
     sections : int array;
   } and
   'a g =
@@ -151,18 +192,22 @@ module Declarative = struct
     | Ptr : 'a g -> 'a c g
     | Text : string g
     | Data : string g
-    | Interface : (stored_interface array ref * stored_method array ref * Int64.t) -> 'a i g
+    | Interface : (stored_interface array ref * int * Int64.t) -> 'a i g
   and stored = Stored : ('a g * 'a) -> stored
   and stored_interface = StoredInterface : 'a i g -> stored_interface
   and 'a builder = Builder of 'a * stored array
-  and 
-  ('i, 'a, 'b) method_t = {
+
+  module type V = sig end
+
+  type ('i, 'a, 'b) method_t = {
     method_id: int;
     method_name: string;
     iface: 'i g; (* We need to know what the interface id is when we generate calls *)
     request: 'a g;
     response: 'b g;
-  } and stored_method = StoredMethod : ('i, 'a, 'b) method_t -> stored_method
+  } 
+
+
 
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
 
@@ -176,7 +221,7 @@ module Declarative = struct
   type 'a ug = 'a s g
 
   let sg dsize psize = Ptr (Struct (dsize, psize, Array.make (8 * (dsize + psize)) 0))
-  let ig id = Ptr (Interface (ref [||], ref [||], id))
+  let ig id = Ptr (Interface (ref [||], 0, id))
 
   (* I don't think we actually need to have the interface be aware of the
    * methods it holds. By making the default implementation an error we don't
@@ -238,7 +283,7 @@ module Declarative = struct
         Array1.fill data 0;
         let stream = {data; pos=0; result=Structured} in
         let ptrs = Array.make pwords (Stored (Void, ())) in
-        Builder ({stream; ptr=StructPtr {dwords; pwords}; caps=[||]; sections=[||]}, ptrs)
+        Builder ({stream; ptr=StructPtr {dwords; pwords}; impls=None; caps=[||]; sections=[||]}, ptrs)
     | _ -> failwith "Builder must be given a struct."
 
   let write_list_ptr offset typ nelem s =
@@ -505,10 +550,12 @@ module Declarative = struct
       | UInt8 -> stream |> push v |> write_int8
       | Int8 -> stream |> push v |> write_int8
       | List _ -> ptrs.(n) <- Stored (t, v); stream
-      | Ptr _ ->
+      | Ptr (Struct _) ->
           begin match field with
           | Group _ -> Array1.blit v.stream.data c.stream.data; stream
           | _ -> ptrs.(n) <- Stored (t, v); stream end
+      | Ptr (Interface _) ->
+          failwith "interface is settable?!"
       | Text -> ptrs.(n) <- Stored (t, v); stream
       | Union (_, g) -> g (Builder (c0 |> cmap (setval Structured), ptrs)) v |> ignore; stream
       | _ -> failwith "This is not an offset field"
@@ -718,7 +765,7 @@ module Utils = struct
       pop1 |> fun (sections, stream) -> 
         let pos = ref (stream.pos / 8) in
         let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
-        {stream; ptr=NullPtr; sections; caps=[||]} |> c_read_ptr |> get (Group (t, None))
+        {stream; ptr=NullPtr; sections; caps=[||]; impls=None} |> c_read_ptr |> get (Group (t, None))
 
   let to_bytes x = 
     let open Bigarray in
