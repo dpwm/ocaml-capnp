@@ -4,6 +4,9 @@ exception OrdinalError of int
 (* The only thing it should know of RPC is that there are interfaces and they have methods. *)
 (* Implementations should instead be a module. *)
 
+(* The stored method definition lives here. We cast to and from an abstract
+ * type. This is arguably more type safe than the alternative. *)
+
 module Stream = struct
   type ('data, 'a) t = { data : 'data; pos : int;  result : 'a }
   (* A very simple (read dangerous) stack based bytestream reader / writer *)
@@ -103,9 +106,7 @@ module Declarative = struct
 
   type data = (int, int8_unsigned_elt, c_layout) Array1.t
 
-
   type 'a s = Structured
-  type 'a u = Unioned
   type 'a i = Interfaced
 
   type 'a bounds = 'a * 'a
@@ -120,26 +121,6 @@ module Declarative = struct
     nelem : int;
   }
 
-  module type Method = sig
-    type request
-    type response
-    type response_g
-    type request_g
-    type response_t
-    val request : request_g
-    val response : response_g
-
-    val call : (request -> response_t)
-  end
-
-
-  module type Impl = sig
-    (* These types will be injected by the RPC layer *)
-    type t
-    val methods : t option array Int64Map.t 
-  end
-
-
   type ptr =
     | NullPtr 
     | StructPtr of struct_ptr
@@ -147,32 +128,28 @@ module Declarative = struct
     | CompositeListPtr of list_ptr * struct_ptr
     | CapabilityPtr of int
 
-  (* What does this module really need to know? *)
-  module type Impls = sig
-    type t (* the implementation type *)
+  type ('concurrency, 'interface) ximpl_t
+  type ximpl = XImpl: ('concurrency, 'implementation) ximpl_t -> ximpl
 
-    (* This will allow adding of a new entry *)
-    val add : t -> int
-    val merge : t -> t -> int
-    (* All the other stuff, that is LWT aware, is hidden *)
-  end
+  let empty_impls = (0, [])
 
-  type impl = (module Impl with type t = method_m)
-  and  method_m = Method : (
-    module Method with
-      type request = 'a and type request_g = 'a g and
-      type response = 'b and type response_g = 'b g) -> method_m
-  and 'a c = {
+    
+
+  type
+  'a c = {
     stream : (data, 'a) Stream.t;
     ptr : ptr;
     caps : (unit c) array ;
-    impls : (module Impls with type t = stored_interface) option;
+    impls : int * ximpl list;
     sections : int array;
   } and
   'a g =
     | Bool : bool g
     | Void : unit g
-    | UInt64 : int64 g
+
+    (* Unsigned integers are just same as signed integers. You only have to be
+     * careful with division and printing. *)
+    | UInt64 : int64 g 
     | UInt32 : int32 g
     | UInt16 : int g
     | UInt8 : int g
@@ -184,20 +161,27 @@ module Declarative = struct
 
     | Float64 : float g
     | Float32 : float g
+    (* Float32 is conveniently a subset of Float64 *)
 
     | Struct : int * int * int array -> 'a s g
+    (* A struct is data words, pointer words, and a mask. *)
+
     | Union : ('b s c -> 'a) * ('b s c builder -> 'a -> 'b s c builder) -> 'a g
+    (* A union is a mapping *)
+
     | Enum : (int -> 'a) * ('a -> int) -> 'a g
     | List : 'a g -> 'a array g
     | Ptr : 'a g -> 'a c g
     | Text : string g
     | Data : string g
     | Interface : (stored_interface array ref * int * Int64.t) -> 'a i g
-  and stored = Stored : ('a g * 'a) -> stored
-  and stored_interface = StoredInterface : 'a i g -> stored_interface
-  and 'a builder = Builder of 'a * stored array
+    (* An interface stores the superclasses, the number of methods and the id *)
 
-  module type V = sig end
+  and stored_interface = StoredInterface : 'a i g -> stored_interface
+  (* This is needed for Interface *)
+  and 'a builder = Builder of 'a * stored array
+  and stored = Stored : ('a g * 'a) -> stored
+  (* Sometimes we wish to store things. This is a simple existential type allowing a stored value with its type. *)
 
   type ('i, 'a, 'b) method_t = {
     method_id: int;
@@ -207,6 +191,23 @@ module Declarative = struct
     response: 'b g;
   } 
 
+  let null_data = Array1.create int8_unsigned c_layout 0
+
+  let cap_ptr cap = 
+    let data = null_data in
+    let open Stream in
+    {stream = {data; pos=0; result=Interfaced}; impls=(1, [cap]); ptr=CapabilityPtr 0;
+    caps=[||]; sections=[|0|]}
+
+  (* It's not enough to represent a method. We also need to represent a method
+   * containing an Lwt thread. This is somewhat troublesome as we cannot know
+   * anything about Lwt in here and we don't wish to functorize for the following reasons:
+     * Any functor must be instatiated in. This is offputting to those unfamiliar with the module language.
+     * Any imported modules must also be functorized appropriately.
+     * 
+     * We use functors for other things
+     *
+     * *)
 
 
   module IntMap = Map.Make(struct type t = int let compare a b = b - a end)
@@ -283,7 +284,7 @@ module Declarative = struct
         Array1.fill data 0;
         let stream = {data; pos=0; result=Structured} in
         let ptrs = Array.make pwords (Stored (Void, ())) in
-        Builder ({stream; ptr=StructPtr {dwords; pwords}; impls=None; caps=[||]; sections=[||]}, ptrs)
+        Builder ({stream; ptr=StructPtr {dwords; pwords}; impls=empty_impls; caps=[||]; sections=[||]}, ptrs)
     | _ -> failwith "Builder must be given a struct."
 
   let write_list_ptr offset typ nelem s =
@@ -311,6 +312,17 @@ module Declarative = struct
     write_bits64u 48 16 |>
     write_int64
 
+  let write_cap_ptr n s = 
+    s |> 
+    push n |>
+    push 0 |>
+    push 3 |> 
+    push 0L |>
+    write_bits64u 0 2 |>
+    write_bits64u 2 30 |> 
+    write_bits64u 32 32 |> 
+    write_int64
+
 
   let write_ptr ptr s1 s2 =
     let offset = ((s2.pos - s1.pos) / 8) - 1 in
@@ -322,7 +334,7 @@ module Declarative = struct
         let s1 = write_list_ptr offset typ (nelem * (dwords + pwords)) s1 in
         let s2 = write_struct_ptr nelem dwords pwords s2 in
         s1, s2
-    | CapabilityPtr _  -> failwith "capability pointer failure"
+    | CapabilityPtr n  -> (write_cap_ptr n s1), s2 
 
   type 'a stream = Stream of 'a c
   let msg_data (Stream c) = c.stream.data
@@ -425,7 +437,13 @@ module Declarative = struct
       ), (n + 1)
     )) |> fst |> cmap (setpos 0)
 
-  let build t f = t |> openbuilder |> f |> closebuilder
+  let copy_impls (Builder (c1, _)) (Builder(c2,ptrs)) = 
+    Builder ({c2 with impls = c1.impls}, ptrs)
+
+
+
+  let build t f = 
+    t |> openbuilder |> f |>closebuilder
 
 
   let ug f g = Group (Union (f, g), None)
@@ -531,7 +549,9 @@ module Declarative = struct
       | CapabilityPtr x -> 
           x |> Int32.of_int
       | _ -> failwith "Not a capability pointer."
-    
+
+  let add_impl x (n, xs) =
+    (n + 1, x :: xs)
 
   let set : type a s.  (s, a) field -> a -> s c builder -> s c builder = 
     fun field v ber ->
@@ -539,6 +559,8 @@ module Declarative = struct
       let c0 = c in
       let c = c |> mov_field field in
       let (n, t, _), stream = c.stream |> pop1 in
+
+      let ber = ref ber in
 
       (match t with
       | UInt64 -> stream |> push v |> write_int64 (* NO! *)
@@ -551,23 +573,50 @@ module Declarative = struct
       | Int8 -> stream |> push v |> write_int8
       | List _ -> ptrs.(n) <- Stored (t, v); stream
       | Ptr (Struct _) ->
+          (* These need to be prepended. Don't worry, for now, about existing caps. *)
           begin match field with
-          | Group _ -> Array1.blit v.stream.data c.stream.data; stream
+          | Group _ ->
+              (* This causes us a pretty big problem when we have a union of
+               * interfaces. Can we have that? YES. We can have a struct with
+               * interfaces as part of a union. *)
+              Array1.blit v.stream.data c.stream.data; stream
           | _ -> ptrs.(n) <- Stored (t, v); stream end
       | Ptr (Interface _) ->
-          failwith "interface is settable?!"
+          (* 
+           * If you encounter an interface, it is going to have just at most
+           * one implementation and its pointer will be zero.
+           * It is not currently possible to implement an unimplmented capability.
+           * However, structures may have multiple capabilities, and we should advance accordingly.
+           * It's hard to implement something you know is crap.
+           * Nontheless, we will.
+           * 
+           * *)
+          let m = fst c.impls in
+          let impls = c.impls |> (v.impls |> snd |> List.hd |> add_impl) in
+          ptrs.(n) <- Stored (t, {v with ptr = CapabilityPtr m});
+          let c = {c0 with impls} in
+          ber := Builder (c, ptrs); stream
       | Text -> ptrs.(n) <- Stored (t, v); stream
       | Union (_, g) -> g (Builder (c0 |> cmap (setval Structured), ptrs)) v |> ignore; stream
       | _ -> failwith "This is not an offset field"
       ) |> ignore;
 
-      ber
-
+      !ber
 
   let get_field_type = function
       | Field (_, _, t, _) -> t
       | PtrField (_, t, _) -> t
       | Group (t, _) -> t
+
+
+  let setb : type a t. (t, a s c) field -> 
+    (a s c builder -> a s c builder) -> t c builder -> t c builder =
+    fun field f ber ->
+      (* We just allocate in a zero-copy kind of way. *)
+      let ber2 = openbuilder (get_field_type field) |> copy_impls ber |> f in
+      let v = (ber2 |> closebuilder) in
+      set field v ber |> copy_impls ber2
+
 
   (* Recall that a cast can only take place between pointer types. List is complicated, but do-able. *)
   (* This is problematic. Really we need to think about this. *)
@@ -715,7 +764,6 @@ module Declarative = struct
         | t -> failwith (Printf.sprintf "Could not match: %s" (show t))
 
 
-      
 
   let ptr : type a. a g -> a c g = fun t -> Ptr t
 
@@ -765,7 +813,7 @@ module Utils = struct
       pop1 |> fun (sections, stream) -> 
         let pos = ref (stream.pos / 8) in
         let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
-        {stream; ptr=NullPtr; sections; caps=[||]; impls=None} |> c_read_ptr |> get (Group (t, None))
+        {stream; ptr=NullPtr; sections; caps=[||]; impls=empty_impls} |> c_read_ptr |> get (Group (t, None))
 
   let to_bytes x = 
     let open Bigarray in
@@ -790,8 +838,6 @@ module Utils = struct
       x |> msg |> msg_data 
 
 end
-
-
 
 module Functors = struct
   open Declarative

@@ -136,6 +136,7 @@ module Node = struct
   end
   
   module Struct = struct
+    type lazy_ = {dataWordCount : int Lazy.t; pointerCount : int Lazy.t}
     include (Self.Node.Struct : Type with type t = Self.Node.Struct.t)
     let dataWordCount = field t UInt16 112l
     let pointerCount = field t UInt16 192l
@@ -144,7 +145,14 @@ module Node = struct
     let discriminantCount = field t UInt16 240l
     let discriminantOffset = field t UInt32 256l
     let fields = field t (List Self.Field.t) 3l
+
   end
+
+  (* *NOT* like this! It loses all advatages.
+  let new_Struct ?(dataWordCount:int=0) ?(pointerCount:int=0) b = b |>
+      set Struct.dataWordCount dataWordCount |>
+      set Struct.pointerCount pointerCount
+      *)
   
   module Enum = struct
     include (Self.Node.Enum : Type with type t = Self.Node.Enum.t)

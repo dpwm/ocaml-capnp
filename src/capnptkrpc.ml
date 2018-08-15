@@ -21,6 +21,9 @@ module Uint8Array1 = struct
   external to_bytes : t -> Lwt_bytes.t = "%identity"
 end
 
+(* We now just store the ibuilder type *)
+type lwt
+
 
 (* The implementation table is *)
 (* Basically, an implementation can just be a pointer into the implementation
@@ -42,44 +45,40 @@ end
 
 
 
-
-type imethod = IMethod : ('i, 'a, 'b) method_t * ('a -> 'b Lwt.t) -> imethod
-
 type 'a ibuilder = {
   interface: 'a i g;
-  methods : method_m option array
-}
+  methods : stored_method option array Int64Map.t;
+  id : int;
+} and 
+('i, 'a, 'b) implemented_method = {
+  m : ('i, 'a, 'b) method_t;
+  f : ('a -> 'b Lwt.t)
+} and
+stored_method = StoredMethod : ('i i c, 'a, 'b) implemented_method  -> stored_method
 
 type implementation = Implementation : 'a ibuilder  -> implementation
 
 
-let wrap_method (type a') (type b') (m : (_, a', b')  method_t) (f0: a' -> b' Lwt.t) =
-  (* Produce a method first-class module *)
-  (module struct
-    type request = a'
-    type response = b'
-    type request_g = request g
-    type response_g = response g
-    type response_t = response Lwt.t
+(* This is simpler and better than the alternative *)
+external to_ximpl : 'i ibuilder -> (lwt, 'i) ximpl_t = "%identity"
+external of_ximpl : (lwt, 'i) ximpl_t -> 'i ibuilder = "%identity"
 
-    let request = m.request
-    let response = m.response
-    let call = f0
-  end : Method with 
-    type request = a' and
-    type response = b' and
-    type request_g = a' g and
-    type response_g = b' g and
-    type response_t = b' Lwt.t
-  )
+let get_interface : type a. a i c g -> _ =
+  function 
+    | Ptr Interface x -> x
+    | _ -> failwith "not an interface"
 
-
-(* let declare : 
+let declare : 
   type a b. ('i i c, a, b) method_t -> (a -> b Lwt.t) -> 'i ibuilder -> 'i ibuilder =
     fun m f b ->
-      b.methods.(0) <- Some (Method (wrap_method m f));
-      b 
-      *)
+      (* What if we already have it? *)
+      let _, nmeth, iid = get_interface m.iface in
+      let mtab, b = try Int64Map.find iid b.methods, b with | Not_found ->
+        let xs = (Array.make nmeth None) in
+        xs, {b with methods=Int64Map.add iid xs b.methods};
+      in
+      mtab.(m.method_id) <- Some (StoredMethod {m; f});
+      b
 
 (* An implementation is going to take a struct and return a struct.  Each of
  * these structs may contain capabilities. Each capability refers to an
@@ -92,11 +91,9 @@ let wrap_method (type a') (type b') (m : (_, a', b')  method_t) (f0: a' -> b' Lw
  *
  * *)
 
-let implement : type a. a i g -> (a ibuilder -> a ibuilder) -> implementation = 
-  fun interface f ->
-    match interface with 
-    | Interface (_, n, _) -> Implementation ({interface; methods=Array.make n None} |> f)
-    | _ -> failwith "Must be an interface"
+
+
+let unptr = function | Ptr x -> x | _ -> failwith "foo"
 
 
 type 'a peer = {
@@ -105,19 +102,41 @@ type 'a peer = {
   mutable question_id : int32;
   mutable questions : Rpc.Return.t Lwt.u Int32Map.t;
   mutable imports : int Int32Map.t;
-  mutable exports : impl Int32Map.t;
-  bootstrap : 'a i g option
+  mutable exports : unit Int32Map.t;
+  bootstrap : 'a i c option
 }
 
+(* If we could . The problem is that the types are going to be unknown. *)
+(* A function on the plain side could assist with registering the table and
+ * avoid having to deal with horrible types. *)
 
-let peer () =
+
+let implementation_id =
+  let x = ref 0 in
+  let inc () = 
+    let x' = !x in
+    x := x' + 1;
+    x'
+  in
+  inc
+
+let implement : type a. a i c g -> (a ibuilder -> a ibuilder) -> a i c = 
+  fun interface f ->
+    (* We want to create an interface with just a cap ptr *)
+
+    let ximpl = {interface=unptr interface; methods=Int64Map.empty; id=implementation_id ()} |> f |> to_ximpl in
+
+    cap_ptr (XImpl ximpl)
+
+
+let peer ?bootstrap () =
   let open Lwt_unix in
   let fd = socket PF_INET SOCK_STREAM 0 in
   let question_id = 0l in
   let questions = Int32Map.empty in
   let exports = Int32Map.empty in
   let imports = Int32Map.empty in
-  let bootstrap = None in
+  let bootstrap = bootstrap in
   { fd; question_id; questions; exports; bootstrap; imports }
 
 let peer_connect peer = 
@@ -252,9 +271,13 @@ let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable Lwt.t =
 
 let dispatch : _ peer -> Rpc.Call.t -> unit c Lwt.t =
   fun server call -> 
+    server |> ignore;
+
     match call => Rpc.Call.target => Rpc.MessageTarget.union with
     | ImportedCap c ->
-        let e = server.exports |> Int32Map.find c in
+        c |> ignore;
+        failwith "foO"
+        (*let e = server.exports |> Int32Map.find c in
         let module I = (val e) in
         failwith ""
         (* let iface = I.methods |> Int64Map.find (call => Rpc.Call.interfaceId) in
@@ -267,6 +290,7 @@ let dispatch : _ peer -> Rpc.Call.t -> unit c Lwt.t =
         | _ -> 
         failwith "bar"
         end
+        *)
         *)
     | _ -> failwith "not supported yet"
     (* |> fun (Implementation iface) -> 
