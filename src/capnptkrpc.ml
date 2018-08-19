@@ -1,5 +1,6 @@
 open Capnptk.Declarative
 
+
 (* A server is a collection of implementations *)
 module Int = struct
   type t = int
@@ -101,8 +102,13 @@ type 'a peer = {
   fd : Lwt_unix.file_descr;
   mutable question_id : int32;
   mutable questions : Rpc.Return.t Lwt.u Int32Map.t;
+
+  mutable answers : Rpc.Return.t Lwt.t Int32Map.t;
+
   mutable imports : int Int32Map.t;
-  mutable exports : unit Int32Map.t;
+  (* Exports is interesting. We want both directions to be mappable. *)
+  mutable export_id : int;
+  mutable exports : int Int32Map.t;
   bootstrap : 'a i c option
 }
 
@@ -123,21 +129,25 @@ let implementation_id =
 let implement : type a. a i c g -> (a ibuilder -> a ibuilder) -> a i c = 
   fun interface f ->
     (* We want to create an interface with just a cap ptr *)
+    f |> ignore;
 
-    let ximpl = {interface=unptr interface; methods=Int64Map.empty; id=implementation_id ()} |> f |> to_ximpl in
+    let ximpl = 
+      {interface=unptr interface; methods=Int64Map.empty; id=implementation_id ()} |> f |> to_ximpl in
 
     cap_ptr (XImpl ximpl)
 
 
-let peer ?bootstrap () =
-  let open Lwt_unix in
-  let fd = socket PF_INET SOCK_STREAM 0 in
+let peer ?fd ?bootstrap () =
+  let fd = match fd with | Some fd -> fd | None -> 
+    Lwt_unix.(socket PF_INET SOCK_STREAM 0) in
   let question_id = 0l in
   let questions = Int32Map.empty in
   let exports = Int32Map.empty in
   let imports = Int32Map.empty in
+  let answers = Int32Map.empty in
+  let export_id = 0 in
   let bootstrap = bootstrap in
-  { fd; question_id; questions; exports; bootstrap; imports }
+  { fd; question_id; questions; exports; bootstrap; imports; export_id; answers }
 
 let peer_connect peer = 
   let open Lwt_unix in
@@ -146,34 +156,6 @@ let peer_connect peer =
   let address = address |> List.hd in
   let%lwt _ = connect peer.fd address.ai_addr in
   Lwt.return ()
-
-let peer_loop peer = 
-  let buf = Lwt_bytes.create 2048 in
-  (* TODO: REMOVE HACKY HACK *)
-
-  let rec f () = 
-    let open Capnptk in
-    let%lwt n = Lwt_bytes.recv peer.fd buf 0 (Lwt_bytes.length buf) [] in
-    match n with
-    | 0 ->  f ()
-    | n -> 
-        (
-        let message = (Utils.decode Rpc.Message.t (Uint8Array1.of_bytes (Bigarray.Array1.sub buf 0 n))) in
-
-        let open Rpc in
-        match message => Message.union with
-        | Return r -> 
-            let qid = Declarative.(r => Return.answerId) in
-            Lwt.wakeup_later (peer.questions |> Int32Map.find qid) r;
-            f ()
-        | Abort e -> failwith (e => Rpc.Exception.reason)
-        | _ -> f ())
-    in
-    f ()
-
-
-
-
 
 
 
@@ -269,16 +251,13 @@ let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable Lwt.t =
 
 
 
-let dispatch : _ peer -> Rpc.Call.t -> unit c Lwt.t =
+let dispatch : _ peer -> Rpc.Call.t -> Rpc.Return.t Lwt.t =
   fun server call -> 
     server |> ignore;
 
     match call => Rpc.Call.target => Rpc.MessageTarget.union with
     | ImportedCap c ->
-        c |> ignore;
-        failwith "foO"
-        (*let e = server.exports |> Int32Map.find c in
-        let module I = (val e) in
+        let _ = server.exports |> Int32Map.find c in
         failwith ""
         (* let iface = I.methods |> Int64Map.find (call => Rpc.Call.interfaceId) in
         begin match iface.(call => Rpc.Call.methodId) with 
@@ -290,7 +269,6 @@ let dispatch : _ peer -> Rpc.Call.t -> unit c Lwt.t =
         | _ -> 
         failwith "bar"
         end
-        *)
         *)
     | _ -> failwith "not supported yet"
     (* |> fun (Implementation iface) -> 
@@ -336,8 +314,124 @@ let csync (a, b, c, d) =
   let open Lwt.Infix in
   a >>= (fun _ -> Lwt.return (a, b, c, d))
 
+let result (a, _, _, _) = a
+
 let ptrField : ('s, 'a) field -> ('s c, 'p) chainable -> ('a, 'p) chainable Lwt.t =
   fun field chain ->
     match field with 
     | PtrField (n, _, _) -> chain |> push_op (Rpc.PromisedAnswer.Op.GetPointerField n) |> chainable_map (get field)
     | _ -> failwith "not a pointer field"
+
+let store_answer peer answer_id return =
+  (* I am told by the client to store this as *)
+  peer.answers <- peer.answers |> Int32Map.add answer_id return; return
+
+
+let send_msg peer x =
+  let msg = x |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
+  let len = (Lwt_bytes.length msg) in
+  let%lwt _ = Lwt_bytes.send peer.fd msg 0 len [] in
+  Lwt.return ()
+
+
+let send_return peer v =
+  let msg = Rpc.Message.(build t
+  (fun x -> 
+    x |> 
+    set Rpc.Message.union (Return v))) in
+  send_msg peer msg
+
+let peer_loop peer = 
+  let buf = Lwt_bytes.create 2048 in
+  (* TODO: REMOVE HACKY HACK -- this should be easy.*)
+
+  let rec f () = 
+    let open Lwt.Infix in
+    let%lwt n = Lwt_bytes.recv peer.fd buf 0 (Lwt_bytes.length buf) [] in
+    match n with
+    | 0 ->  Lwt.return () >>= f
+    | _ -> 
+        (
+        let open Capnptk in
+        let message = (Utils.decode Rpc.Message.t (Uint8Array1.of_bytes (Bigarray.Array1.sub buf 0 n))) in
+
+        let open Rpc in
+        match message => Message.union with
+        | Return r -> 
+            let qid = Declarative.(r => Return.answerId) in
+            Lwt.wakeup_later (peer.questions |> Int32Map.find qid) r;
+            () |> Lwt.return >>= f
+        | Call c -> 
+            let%lwt _ = dispatch peer c in
+            () |> Lwt.return >>= f
+        | Bootstrap b ->
+            begin match peer.bootstrap with
+            | Some biface ->
+                biface |> ignore;
+                let qid = Rpc.Bootstrap.(b => questionId) in
+                Lwt_log.info_f "bootstrap called %ld" qid;%lwt
+                let answer = try
+                  Rpc.Return.(build t (fun x ->
+                  x |> 
+                  set union (Results (
+                    Rpc.Payload.(build t (fun x -> 
+                      x |> 
+                      set capTable [| 
+
+                      |]
+                      )))) |>
+                  set answerId qid |> 
+                  set releaseParamCaps true
+                )) 
+                with | e -> Lwt.async (fun () -> Lwt_log.info_f "Exception: %s" (Printexc.to_string e)); raise e
+                in
+                answer |> ignore;
+                Lwt_log.info "Generated answer";%lwt
+
+                let v = answer |> Lwt.return |> store_answer peer qid in
+                v >>= send_return peer;%lwt
+                f ()
+            | None -> failwith "bootstrap not set" 
+            end
+        | Abort e -> failwith (e => Rpc.Exception.reason)
+        | _ -> () |> Lwt.return >>= f)
+    in
+    f ()
+
+
+let peer_serve peer = 
+  let open Lwt_unix in
+  let open Lwt.Infix in
+  on_signal Sys.sigint (fun _ -> failwith "Caught SIGINT") |> ignore;
+  on_signal Sys.sigterm (fun _ -> failwith "Caught SIGTERM") |> ignore;
+  setsockopt peer.fd SO_REUSEADDR true;
+  (* This is necessary so that we can relaunch the server. *)
+
+  let%lwt address = 
+    getaddrinfo "0.0.0.0" "60000" [AI_FAMILY PF_INET; AI_SOCKTYPE SOCK_STREAM] in
+  let address = address |> List.hd in
+  let%lwt _ = bind peer.fd address.ai_addr in
+  Lwt_log.info "Listening on address";%lwt
+
+  listen peer.fd 5;
+
+  let rec f () = 
+    
+    let%lwt fd, sockaddr = accept peer.fd in
+    let soi = Unix.string_of_inet_addr in
+    let%lwt _ = (match sockaddr with 
+    | ADDR_UNIX x -> Lwt_log.info_f "Accepted connection from %s\n" x
+    | ADDR_INET (x, v) -> Lwt_log.info_f "Accepted connection from %s:%d\n" (soi x) v
+    ) in
+    
+    Lwt.async (fun () -> try%lwt
+      peer_loop { peer with fd }
+      with 
+      | e ->  (
+        close fd;%lwt
+        Lwt_log.info_f "An error occured: %s\nBacktrace:\n%s" (Printexc.to_string e) (Printexc.get_backtrace ());%lwt
+        Lwt_log.info "Peer loop closed."
+      ));
+    f ()
+  in
+  Lwt.return () >>= f

@@ -52,8 +52,8 @@ let open_body_module name fmt =
 let structure_type dwords pwords fmt =
   fprintf fmt "@ @[type t'@ type t = t' sgu let t : t g@ =@ sg %d %d@]" dwords pwords; fmt
 
-let interface_type id fmt =
-  fprintf fmt "@ @[type t'@ type t = t' igu let t : t g@ =@ ig 0x%LxL@]" id; fmt
+let interface_type nmeth id fmt =
+  fprintf fmt "@ @[type t'@ type t = t' igu let t : t g@ =@ ig %d 0x%LxL@]" nmeth id; fmt
 
 let let_statement name expr fmt = 
   fprintf fmt "@ let %s = %s" name expr; fmt

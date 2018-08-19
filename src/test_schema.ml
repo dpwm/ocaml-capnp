@@ -8,10 +8,10 @@ module Self = struct
   module LinkedList = struct
     type t' type t = t' sgu let t : t g = sg 2 1 end
   module FooServer = struct
-    type t' type t = t' igu let t : t g = ig 0xdd26071fa8e78974L
+    type t' type t = t' igu let t : t g = ig 2 0xdd26071fa8e78974L
   end
   module BarServer = struct
-    type t' type t = t' igu let t : t g = ig 0xa882934f19d864ecL
+    type t' type t = t' igu let t : t g = ig 1 0xa882934f19d864ecL
   end
 end
 

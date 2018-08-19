@@ -122,11 +122,11 @@ let rec show_node_head (state:state) node =
       state
 
 
-  | Interface _ -> 
+  | Interface i -> 
       let name = List.hd state.path in
       fmt |> 
       open_module name |> 
-      interface_type  (node => Node.id) |>
+      interface_type (i => Node.Interface.methods |> Array.length) (node => Node.id) |>
       close_module |> ignore;
       state
 

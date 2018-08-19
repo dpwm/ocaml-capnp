@@ -222,7 +222,7 @@ module Declarative = struct
   type 'a ug = 'a s g
 
   let sg dsize psize = Ptr (Struct (dsize, psize, Array.make (8 * (dsize + psize)) 0))
-  let ig id = Ptr (Interface (ref [||], 0, id))
+  let ig n id = Ptr (Interface (ref [||], n, id))
 
   (* I don't think we actually need to have the interface be aware of the
    * methods it holds. By making the default implementation an error we don't
@@ -233,8 +233,6 @@ module Declarative = struct
     fun iface request response method_id method_name -> 
       let m = { method_id; method_name;  request; response;  iface } in
       m
- 
-
 
 
   module type Type = sig
@@ -562,7 +560,9 @@ module Declarative = struct
 
       let ber = ref ber in
 
+      (* we need to fix this! *)
       (match t with
+      | Bool -> stream
       | UInt64 -> stream |> push v |> write_int64 (* NO! *)
       | Int64 -> stream |> push v |> write_int64
       | UInt32 -> stream |> push v |> write_int32
@@ -629,6 +629,8 @@ module Declarative = struct
       | PtrField (i, _, _), true -> PtrField (i, t, None)
       | _ -> failwith "cannot cast data or group field."
 
+  let to_void : 'a c -> unit c = fun x -> cmap (setval ()) x
+
   let cast_struct : type a b. a g -> b g -> a -> b =
     fun t1 t2 -> 
       match (t1, t2) with
@@ -637,6 +639,7 @@ module Declarative = struct
       | (Ptr Struct _, Ptr Void) -> 
         cmap (setval ())
       | _ -> failwith "unsupported cast"
+
 
 
 

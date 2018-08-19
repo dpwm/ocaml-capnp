@@ -59,12 +59,37 @@ let () =
   ) in
 
   let fooserver = FooServer.(
-    implement t (fun x -> x |>
-    declare get1 (fun _ -> Get1_Results.(build t (
-      fun b -> b |> set result (barserver "BarServer(Get1)")
-    ) |> Lwt.return)))) in
+    implement t (fun x -> 
+      x |> 
+      declare get1 (
+        fun _ -> Get1_Results.(
+          build t (fun b -> b |> set result (barserver "Get1")
+          ) |> Lwt.return)) |>
+      declare get2 (
+        fun _ -> Get2_Results.(
+          build t (fun b -> b |> set result (barserver "Get2")) |> Lwt.return))
+      )) in
 
-  let p = peer ~bootstrap:fooserver () in
-  p |> ignore;
+  Lwt_log.default :=
+  Lwt_log.channel
+    ~template:"$(date).$(milliseconds) [$(level)] $(message)"
+    ~close_mode:`Keep
+    ~channel:Lwt_io.stdout
+    ();
+
+  Lwt_log.add_rule "*" Lwt_log.Info;
+
+  let run_server () = 
+    let p = peer ~bootstrap:fooserver () in
+    Lwt.async (fun () -> peer_serve p);
+    let p2 = peer () in
+    peer_connect p2;%lwt
+    Lwt.async (fun () -> peer_loop p2);
+    let (>>=) = Lwt.Infix.(>>=) in
+    let%lwt _ = bootstrap Test_schema.FooServer.t p2 >>= result in 
+    Lwt_log.info "Bootstrap returned"
+  in
+
+  Lwt_main.run (run_server ());
 
   ()
