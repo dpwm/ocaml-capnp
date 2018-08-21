@@ -62,7 +62,7 @@ type implementation = Implementation : 'a ibuilder  -> implementation
 
 (* This is simpler and better than the alternative *)
 external to_ximpl : 'i ibuilder -> (lwt, 'i) ximpl_t = "%identity"
-external of_ximpl : (lwt, 'i) ximpl_t -> 'i ibuilder = "%identity"
+external of_ximpl : (_, 'i) ximpl_t -> 'i ibuilder = "%identity"
 
 let get_interface : type a. a i c g -> _ =
   function 
@@ -96,6 +96,12 @@ let declare :
 
 let unptr = function | Ptr x -> x | _ -> failwith "foo"
 
+type 'a refcounted = 'a * int
+let addref n (x, c) = (x, c + n)
+let incref (x, c) = addref (1) (x, c)
+let refcounted ?(n=1) x = (x, n)
+let refcounted_get (x, _) = x
+
 
 type 'a peer = {
   (* We use an integer for the question_id. It seems *)
@@ -108,7 +114,8 @@ type 'a peer = {
   mutable imports : int Int32Map.t;
   (* Exports is interesting. We want both directions to be mappable. *)
   mutable export_id : int;
-  mutable exports : int Int32Map.t;
+  mutable exports : ximpl refcounted IntMap.t;
+  mutable implementations : int IntMap.t;
   bootstrap : 'a i c option
 }
 
@@ -129,8 +136,6 @@ let implementation_id =
 let implement : type a. a i c g -> (a ibuilder -> a ibuilder) -> a i c = 
   fun interface f ->
     (* We want to create an interface with just a cap ptr *)
-    f |> ignore;
-
     let ximpl = 
       {interface=unptr interface; methods=Int64Map.empty; id=implementation_id ()} |> f |> to_ximpl in
 
@@ -142,12 +147,13 @@ let peer ?fd ?bootstrap () =
     Lwt_unix.(socket PF_INET SOCK_STREAM 0) in
   let question_id = 0l in
   let questions = Int32Map.empty in
-  let exports = Int32Map.empty in
+  let exports = IntMap.empty in
   let imports = Int32Map.empty in
+  let implementations = IntMap.empty in
   let answers = Int32Map.empty in
   let export_id = 0 in
   let bootstrap = bootstrap in
-  { fd; question_id; questions; exports; bootstrap; imports; export_id; answers }
+  { fd; question_id; questions; exports; bootstrap; imports; export_id; answers; implementations }
 
 let peer_connect peer = 
   let open Lwt_unix in
@@ -241,6 +247,11 @@ let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p)
 
 
 
+let cap_get_id x =
+  let XImpl v = x in
+  let v = v |> of_ximpl in
+  v.id
+
 let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable Lwt.t =
   fun t peer -> 
     let msg question_id = build Rpc.Message.t (
@@ -249,16 +260,115 @@ let bootstrap : type a. a i c g -> 'p peer -> (a i c, 'p) chainable Lwt.t =
           set Rpc.Bootstrap.questionId question_id)))) in
     question msg t peer
 
+let inc_capability_ref peer c =
+  (* We will take a capability.*) 
+  let id = cap_get_id c in
+
+  let capid = try
+    peer.implementations |> IntMap.find id 
+  with  Not_found ->
+    let v = peer.export_id in
+    peer.export_id <- 1 + peer.export_id;
+    peer.implementations <- IntMap.add id v peer.implementations;
+    v
+  in
+
+  (* We must increment the reference count *)
+  begin try 
+    let r = IntMap.find capid peer.exports in
+    peer.exports <- IntMap.add capid (incref r) peer.exports
+  with Not_found ->
+    peer.exports <- IntMap.add capid (refcounted c) peer.exports
+  end;
+  
+
+  Rpc.CapDescriptor.SenderHosted (Int32.of_int capid)
 
 
-let dispatch : _ peer -> Rpc.Call.t -> Rpc.Return.t Lwt.t =
+let payload peer biface = 
+  Rpc.Payload.(build t (fun x -> 
+    x |> 
+    set content (to_void biface) |>
+    set capTable ( 
+      biface.impls |> snd |> List.rev |> List.map (
+        fun ximpl -> 
+          let XImpl v = ximpl in
+          let v = v |> of_ximpl in
+          Lwt.async (fun () -> Lwt_log.info_f "With id: %d" v.id);
+          (* Store the capability. *)
+          let u = inc_capability_ref peer ximpl in
+          Rpc.CapDescriptor.(build t (fun v -> v |> set union u))
+    ) |> Array.of_list
+    )
+    )
+  )
+
+let send_msg peer x =
+  let msg = x |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
+  let len = (Lwt_bytes.length msg) in
+  let%lwt _ = Lwt_bytes.send peer.fd msg 0 len [] in
+  Lwt.return ()
+
+
+let send_return peer v =
+  let msg = Rpc.Message.(build t
+  (fun x -> 
+    x |> 
+    set Rpc.Message.union (Return v))) in
+  send_msg peer msg;%lwt
+  Lwt.return v
+
+let return_ok ?(release=true) qid payload = 
+  Rpc.Return.(build t (fun x ->
+  x |> 
+  set union (Results (
+    payload
+    )) |>
+  set answerId qid |> 
+  set releaseParamCaps release
+))
+
+let impl_call_method peer ximpl iid mid params =
+  let XImpl v = ximpl in
+  let v = v |> of_ximpl in
+  params |> ignore;
+
+  match (v.methods |> Int64Map.find iid).(mid) with
+  | Some (StoredMethod {m; f}) -> 
+      let x = params |> cast_struct (Ptr Void) m.request in
+      let%lwt x = f x in
+      let x = cast_struct m.response (Ptr Void) x in
+      payload peer x |> Lwt.return
+  | None -> 
+      failwith "Method not implemented"
+
+
+let dispatch : _ peer -> Rpc.Call.t -> unit Lwt.t =
   fun server call -> 
     server |> ignore;
 
+    Lwt_log.info_f "Call %ld" (call => Rpc.Call.questionId);%lwt
     match call => Rpc.Call.target => Rpc.MessageTarget.union with
     | ImportedCap c ->
-        let _ = server.exports |> Int32Map.find c in
-        failwith ""
+        try
+          let ximpl = server.exports |> IntMap.find (Int32.to_int c) |> refcounted_get in
+
+          let f () =
+            let%lwt v = 
+              Rpc.Call.(impl_call_method server ximpl (call => interfaceId) (call => methodId) Rpc.Payload.(call => params => content)) in
+
+              v |> return_ok Rpc.Call.(call=>questionId) |> send_return server
+          in
+
+          Lwt.async f;
+          Lwt.return ()
+
+
+          
+        with Not_found -> 
+          Lwt_log.info "Capability not found"; ;
+
+
         (* let iface = I.methods |> Int64Map.find (call => Rpc.Call.interfaceId) in
         begin match iface.(call => Rpc.Call.methodId) with 
         | Some Method m -> 
@@ -324,22 +434,15 @@ let ptrField : ('s, 'a) field -> ('s c, 'p) chainable -> ('a, 'p) chainable Lwt.
 
 let store_answer peer answer_id return =
   (* I am told by the client to store this as *)
-  peer.answers <- peer.answers |> Int32Map.add answer_id return; return
-
-
-let send_msg peer x =
-  let msg = x |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
-  let len = (Lwt_bytes.length msg) in
-  let%lwt _ = Lwt_bytes.send peer.fd msg 0 len [] in
+  peer.answers <- peer.answers |> Int32Map.add answer_id return; 
   Lwt.return ()
 
 
-let send_return peer v =
-  let msg = Rpc.Message.(build t
-  (fun x -> 
-    x |> 
-    set Rpc.Message.union (Return v))) in
-  send_msg peer msg
+
+
+
+
+
 
 let peer_loop peer = 
   let buf = Lwt_bytes.create 2048 in
@@ -348,6 +451,7 @@ let peer_loop peer =
   let rec f () = 
     let open Lwt.Infix in
     let%lwt n = Lwt_bytes.recv peer.fd buf 0 (Lwt_bytes.length buf) [] in
+    Lwt_log.info_f "received %d" n;%lwt
     match n with
     | 0 ->  Lwt.return () >>= f
     | _ -> 
@@ -358,38 +462,22 @@ let peer_loop peer =
         let open Rpc in
         match message => Message.union with
         | Return r -> 
+            Lwt_log.info "A return!";%lwt
             let qid = Declarative.(r => Return.answerId) in
             Lwt.wakeup_later (peer.questions |> Int32Map.find qid) r;
             () |> Lwt.return >>= f
         | Call c -> 
-            let%lwt _ = dispatch peer c in
-            () |> Lwt.return >>= f
+            Lwt_log.info "A call!";%lwt
+            dispatch peer c 
         | Bootstrap b ->
             begin match peer.bootstrap with
             | Some biface ->
                 biface |> ignore;
                 let qid = Rpc.Bootstrap.(b => questionId) in
                 Lwt_log.info_f "bootstrap called %ld" qid;%lwt
-                let answer = try
-                  Rpc.Return.(build t (fun x ->
-                  x |> 
-                  set union (Results (
-                    Rpc.Payload.(build t (fun x -> 
-                      x |> 
-                      set capTable [| 
 
-                      |]
-                      )))) |>
-                  set answerId qid |> 
-                  set releaseParamCaps true
-                )) 
-                with | e -> Lwt.async (fun () -> Lwt_log.info_f "Exception: %s" (Printexc.to_string e)); raise e
-                in
-                answer |> ignore;
-                Lwt_log.info "Generated answer";%lwt
-
-                let v = answer |> Lwt.return |> store_answer peer qid in
-                v >>= send_return peer;%lwt
+                let answer = payload peer biface |> return_ok qid in
+                Lwt.async (fun () -> (answer |> Lwt.return >>= send_return peer) |> store_answer peer qid);
                 f ()
             | None -> failwith "bootstrap not set" 
             end

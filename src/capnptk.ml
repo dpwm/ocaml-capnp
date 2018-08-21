@@ -250,6 +250,10 @@ module Declarative = struct
     | StructPtr x -> x
     | _ -> failwith "Expected struct pointer"
 
+  let ensure_cap_ptr c = match c.ptr with
+    | CapabilityPtr n -> n
+    | _ -> failwith "Expected struct pointer"
+
   let ensure_compositelist_ptr c = match c.ptr with
     | CompositeListPtr (x,y) -> (x,y)
     | _ -> failwith "Expected composite list pointer"
@@ -415,6 +419,11 @@ module Declarative = struct
             blit d2_data d1_data;
             s |> cmap (d2_data |> dim |> mov);
 
+        | Ptr Interface _ -> 
+            let m = ensure_cap_ptr v in
+            s' |> cmap (fun s -> s |> write_cap_ptr m) |> ignore;
+            {s with impls = v.impls}
+
         | Ptr Void -> 
             let open Array1 in
             let _, stream = write_ptr v.ptr s'.stream s.stream in 
@@ -572,6 +581,7 @@ module Declarative = struct
       | UInt8 -> stream |> push v |> write_int8
       | Int8 -> stream |> push v |> write_int8
       | List _ -> ptrs.(n) <- Stored (t, v); stream
+      | Ptr Void -> ptrs.(n) <- Stored (t, v); stream
       | Ptr (Struct _) ->
           (* These need to be prepended. Don't worry, for now, about existing caps. *)
           begin match field with
@@ -598,7 +608,7 @@ module Declarative = struct
           ber := Builder (c, ptrs); stream
       | Text -> ptrs.(n) <- Stored (t, v); stream
       | Union (_, g) -> g (Builder (c0 |> cmap (setval Structured), ptrs)) v |> ignore; stream
-      | _ -> failwith "This is not an offset field"
+      | _ -> failwith "Cannot set type"
       ) |> ignore;
 
       !ber

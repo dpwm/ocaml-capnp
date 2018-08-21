@@ -57,6 +57,7 @@ let () =
       declare BarServer.get (fun _ -> 
         build BarServer.Get_Results.t (fun x -> x |> set BarServer.Get_Results.result name) |> Lwt.return)
   ) in
+  barserver "1" |> ignore;
 
   let fooserver = FooServer.(
     implement t (fun x -> 
@@ -86,8 +87,15 @@ let () =
     peer_connect p2;%lwt
     Lwt.async (fun () -> peer_loop p2);
     let (>>=) = Lwt.Infix.(>>=) in
-    let%lwt _ = bootstrap Test_schema.FooServer.t p2 >>= result in 
-    Lwt_log.info "Bootstrap returned"
+    let b = bootstrap Test_schema.FooServer.t p2 in 
+    let%lwt result = 
+      b >>=csync >>= 
+        Test_schema.FooServer.(call get1 (build Get1_Params.t (fun x -> x))) >>= 
+          csync >>=
+            ptrField FooServer.Get1_Results.result >>=
+              result in
+    result |> ignore;
+    Lwt_log.info "Call chain complete."
   in
 
   Lwt_main.run (run_server ());
