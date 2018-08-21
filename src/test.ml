@@ -78,7 +78,7 @@ let () =
     ~channel:Lwt_io.stdout
     ();
 
-  Lwt_log.add_rule "*" Lwt_log.Info;
+  Lwt_log.add_rule "*" Lwt_log.Debug;
 
   let run_server () = 
     let p = peer ~bootstrap:fooserver () in
@@ -89,11 +89,11 @@ let () =
     let (>>=) = Lwt.Infix.(>>=) in
     let b = bootstrap Test_schema.FooServer.t p2 in 
     let%lwt result = 
-      b >>=csync >>= 
+      b >>=
         Test_schema.FooServer.(call get1 (build Get1_Params.t (fun x -> x))) >>= 
-          csync >>=
             ptrField FooServer.Get1_Results.result >>=
-              result in
+                Test_schema.BarServer.(call get (build Get_Params.t (fun x -> x))) >>=
+                  result in
     result |> ignore;
     Lwt_log.info "Call chain complete."
   in

@@ -252,7 +252,7 @@ module Declarative = struct
 
   let ensure_cap_ptr c = match c.ptr with
     | CapabilityPtr n -> n
-    | _ -> failwith "Expected struct pointer"
+    | _ -> failwith "Expected capability pointer"
 
   let ensure_compositelist_ptr c = match c.ptr with
     | CompositeListPtr (x,y) -> (x,y)
@@ -775,6 +775,11 @@ module Declarative = struct
             c |> cmap (setval (Interfaced))
 
         | t -> failwith (Printf.sprintf "Could not match: %s" (show t))
+
+
+  let void_get_ptr : int -> unit c -> unit c =
+    fun n c ->
+      c |> mov_field (PtrField (n, (Ptr Void), None)) |> cmap popr |> c_read_ptr
 
 
 

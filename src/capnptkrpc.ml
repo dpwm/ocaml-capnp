@@ -202,7 +202,6 @@ let get_caps c =
 
 let process_return : type t. t c g -> _ peer -> Rpc.Return.t -> t c Lwt.t =
   fun typ peer answer ->
-    peer |> ignore;
     match answer => Rpc.Return.union with
     | Results payload -> 
         (* There may be capabilties to insert into the table. *)
@@ -242,9 +241,10 @@ let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p)
     (* Prepare a future for the result *)
 
     let len = (Lwt_bytes.length msg) in
-    let%lwt _ = Lwt_bytes.send peer.fd msg 0 len [] in
+    Lwt_log.debug "Sending question";%lwt
+    let%lwt n = Lwt_bytes.send peer.fd msg 0 len [] in
+    Lwt_log.debug_f "Done %d" n;%lwt
     (Lwt.bind promise (process_return typ peer), question_id, peer, []) |> Lwt.return
-
 
 
 let cap_get_id x =
@@ -294,7 +294,7 @@ let payload peer biface =
         fun ximpl -> 
           let XImpl v = ximpl in
           let v = v |> of_ximpl in
-          Lwt.async (fun () -> Lwt_log.info_f "With id: %d" v.id);
+          Lwt.async (fun () -> Lwt_log.debug_f "With id: %d" v.id);
           (* Store the capability. *)
           let u = inc_capability_ref peer ximpl in
           Rpc.CapDescriptor.(build t (fun v -> v |> set union u))
@@ -306,7 +306,8 @@ let payload peer biface =
 let send_msg peer x =
   let msg = x |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
   let len = (Lwt_bytes.length msg) in
-  let%lwt _ = Lwt_bytes.send peer.fd msg 0 len [] in
+  let%lwt n = Lwt_bytes.send peer.fd msg 0 len [] in
+  Lwt_log.debug_f "Sent %d bytes" n;%lwt
   Lwt.return ()
 
 
@@ -331,7 +332,6 @@ let return_ok ?(release=true) qid payload =
 let impl_call_method peer ximpl iid mid params =
   let XImpl v = ximpl in
   let v = v |> of_ximpl in
-  params |> ignore;
 
   match (v.methods |> Int64Map.find iid).(mid) with
   | Some (StoredMethod {m; f}) -> 
@@ -342,49 +342,84 @@ let impl_call_method peer ximpl iid mid params =
   | None -> 
       failwith "Method not implemented"
 
+let store_answer peer answer_id =
+  let promise, resolver = Lwt.wait() in
+  peer.answers <- peer.answers |> Int32Map.add answer_id promise; 
+  promise, resolver
+
+let get_return_payload r =
+  match r => Rpc.Return.union with 
+  | Results payload -> payload
+  | _ -> raise Not_found
 
 let dispatch : _ peer -> Rpc.Call.t -> unit Lwt.t =
   fun server call -> 
     server |> ignore;
 
-    Lwt_log.info_f "Call %ld" (call => Rpc.Call.questionId);%lwt
+    Lwt_log.debug_f "Call %ld" (call => Rpc.Call.questionId);%lwt
     match call => Rpc.Call.target => Rpc.MessageTarget.union with
     | ImportedCap c ->
         try
           let ximpl = server.exports |> IntMap.find (Int32.to_int c) |> refcounted_get in
 
+          (* We must take this slightly convoluted path to make sure to avoid
+           * race conditions with chained method calls. *)
+          let _, resolver = store_answer server Rpc.Call.(call => questionId) in
+
+
           let f () =
             let%lwt v = 
               Rpc.Call.(impl_call_method server ximpl (call => interfaceId) (call => methodId) Rpc.Payload.(call => params => content)) in
 
-              v |> return_ok Rpc.Call.(call=>questionId) |> send_return server
+            let%lwt return = v |> return_ok Rpc.Call.(call=>questionId) |> send_return server in
+            Lwt.wakeup_later resolver return;
+            Lwt.return ()
+
           in
 
           Lwt.async f;
           Lwt.return ()
 
-
           
         with Not_found -> 
-          Lwt_log.info "Capability not found"; ;
+          Lwt_log.debug "Capability not found"; ;
+
+    | PromisedAnswer pA -> 
+        let open Rpc.PromisedAnswer in
+
+        let _, resolver = store_answer server Rpc.Call.(call => questionId) in
+
+        let f () = 
+          let%lwt answer = server.answers |> Int32Map.find (pA => questionId) in
+
+          let payload = answer |> get_return_payload in
+
+          let content = pA => transform |> Array.fold_left (fun v x -> match x => Op.union with
+            | Noop -> v
+            | GetPointerField n -> void_get_ptr n v
+          ) (payload => Rpc.Payload.content |> c_read_ptr) in
 
 
-        (* let iface = I.methods |> Int64Map.find (call => Rpc.Call.interfaceId) in
-        begin match iface.(call => Rpc.Call.methodId) with 
-        | Some Method m -> 
-          let module M = (val m) in
+          (* Use this to get a capability *)
 
-          let v = call => Rpc.Call.params => (cast_field Rpc.Payload.content M.request) in 
-          Lwt.bind (M.call v) (fun x -> x |> cast_struct M.response (Ptr Void) |> Lwt.return)
-        | _ -> 
-        failwith "bar"
-        end
-        *)
-    | _ -> failwith "not supported yet"
-    (* |> fun (Implementation iface) -> 
-      let (IMethod (m, f)) = iface.methods |> IntMap.find (call => Rpc.Call.methodId) in
-      let%lwt v = call => Rpc.Call.params => (cast_field Rpc.Payload.content m.request) |> f in
-      v |> cast_struct m.response (Ptr Void) |> Lwt.return *)
+          let i = ensure_cap_ptr content in
+
+          let ximpl = match (payload => Rpc.Payload.capTable).(i) => Rpc.CapDescriptor.union with
+          | SenderHosted c -> 
+              server.exports |> IntMap.find (Int32.to_int c) |> refcounted_get
+          | _ -> raise Not_found
+          in
+
+          let%lwt v = 
+            Rpc.Call.(impl_call_method server ximpl (call => interfaceId) (call => methodId) Rpc.Payload.(call => params => content)) in
+
+          let%lwt return = v |> return_ok Rpc.Call.(call=>questionId) |> send_return server in
+          Lwt.wakeup_later resolver return;
+          Lwt.return ()
+        in
+        Lwt.async f;
+        Lwt.return ()
+            
 
 (* Functions can be composed *)
 
@@ -405,13 +440,17 @@ let call : type a b. ('i, a s c, b s c) method_t -> a s c -> ('i, 'p) chainable 
   fun m x (promise,qid,peer,ops) ->
     ops |> ignore;
     (* Basically prepare a call, send it, *)
+    Lwt_log.debug "Preparing call";%lwt
     match Lwt.state promise with
-    | Sleep -> question (make_call m x (PromisedAnswer Rpc.PromisedAnswer.(build t (fun b -> 
+    | Sleep ->
+        Lwt_log.debug "Sending deferred call";%lwt
+        question (make_call m x (PromisedAnswer Rpc.PromisedAnswer.(build t (fun b -> 
         b |> set questionId qid |>
         (ops |> List.map (fun z -> build Op.t (set Op.union z)) |> List.rev |> Array.of_list |> set transform )
         )))) m.response peer
     | Return v -> 
         let n = v |> get_interface_capability |> Int32.to_int in
+        Lwt_log.debug "Sending immediate call";%lwt
         (match (v |> get_caps).(n) => Rpc.CapDescriptor.union with
         | SenderHosted n -> 
             question (make_call m x (ImportedCap n)) m.response peer
@@ -432,10 +471,6 @@ let ptrField : ('s, 'a) field -> ('s c, 'p) chainable -> ('a, 'p) chainable Lwt.
     | PtrField (n, _, _) -> chain |> push_op (Rpc.PromisedAnswer.Op.GetPointerField n) |> chainable_map (get field)
     | _ -> failwith "not a pointer field"
 
-let store_answer peer answer_id return =
-  (* I am told by the client to store this as *)
-  peer.answers <- peer.answers |> Int32Map.add answer_id return; 
-  Lwt.return ()
 
 
 
@@ -451,9 +486,8 @@ let peer_loop peer =
   let rec f () = 
     let open Lwt.Infix in
     let%lwt n = Lwt_bytes.recv peer.fd buf 0 (Lwt_bytes.length buf) [] in
-    Lwt_log.info_f "received %d" n;%lwt
     match n with
-    | 0 ->  Lwt.return () >>= f
+    | 0 ->  f ()
     | _ -> 
         (
         let open Capnptk in
@@ -462,22 +496,30 @@ let peer_loop peer =
         let open Rpc in
         match message => Message.union with
         | Return r -> 
-            Lwt_log.info "A return!";%lwt
+            Lwt_log.debug "A return!";%lwt
             let qid = Declarative.(r => Return.answerId) in
             Lwt.wakeup_later (peer.questions |> Int32Map.find qid) r;
-            () |> Lwt.return >>= f
+            f ()
         | Call c -> 
-            Lwt_log.info "A call!";%lwt
-            dispatch peer c 
+            Lwt_log.debug "A call!";%lwt
+            dispatch peer c;%lwt
+            f ()
         | Bootstrap b ->
             begin match peer.bootstrap with
             | Some biface ->
                 biface |> ignore;
                 let qid = Rpc.Bootstrap.(b => questionId) in
-                Lwt_log.info_f "bootstrap called %ld" qid;%lwt
+                Lwt_log.debug_f "bootstrap called %ld" qid;%lwt
+
+                let _, resolver = store_answer peer qid in
 
                 let answer = payload peer biface |> return_ok qid in
-                Lwt.async (fun () -> (answer |> Lwt.return >>= send_return peer) |> store_answer peer qid);
+                let af () = 
+                  let%lwt r = send_return peer answer in
+                  Lwt.wakeup_later resolver r;
+                  Lwt.return ()
+                in
+                Lwt.async af;
                 f ()
             | None -> failwith "bootstrap not set" 
             end
@@ -499,7 +541,7 @@ let peer_serve peer =
     getaddrinfo "0.0.0.0" "60000" [AI_FAMILY PF_INET; AI_SOCKTYPE SOCK_STREAM] in
   let address = address |> List.hd in
   let%lwt _ = bind peer.fd address.ai_addr in
-  Lwt_log.info "Listening on address";%lwt
+  Lwt_log.debug "Listening on address";%lwt
 
   listen peer.fd 5;
 
@@ -508,8 +550,8 @@ let peer_serve peer =
     let%lwt fd, sockaddr = accept peer.fd in
     let soi = Unix.string_of_inet_addr in
     let%lwt _ = (match sockaddr with 
-    | ADDR_UNIX x -> Lwt_log.info_f "Accepted connection from %s\n" x
-    | ADDR_INET (x, v) -> Lwt_log.info_f "Accepted connection from %s:%d\n" (soi x) v
+    | ADDR_UNIX x -> Lwt_log.debug_f "Accepted connection from %s" x
+    | ADDR_INET (x, v) -> Lwt_log.debug_f "Accepted connection from %s:%d" (soi x) v
     ) in
     
     Lwt.async (fun () -> try%lwt
@@ -517,8 +559,8 @@ let peer_serve peer =
       with 
       | e ->  (
         close fd;%lwt
-        Lwt_log.info_f "An error occured: %s\nBacktrace:\n%s" (Printexc.to_string e) (Printexc.get_backtrace ());%lwt
-        Lwt_log.info "Peer loop closed."
+        Lwt_log.debug_f "An error occured: %s\nBacktrace:\n%s" (Printexc.to_string e) (Printexc.get_backtrace ());%lwt
+        Lwt_log.debug "Peer loop closed."
       ));
     f ()
   in
