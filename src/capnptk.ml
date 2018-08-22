@@ -823,16 +823,25 @@ module Utils = struct
   let cursor data = 
     {data; pos=0; result=()}
 
+
+  let msg_to_struct t (sections, stream) =
+      let pos = ref (stream.pos / 8) in
+      let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
+      {stream; ptr=NullPtr; sections; caps=[||]; impls=empty_impls} |> c_read_ptr |> get (Group (t, None))
+
+
+  let from_bytes t sections data =
+    msg_to_struct t (sections, cursor data)
+
+
+
   let decode : type a. a sg -> data -> a sgu = 
     fun t data ->
       let open Stream in
       cursor data |> 
       read_header |>
-      pop1 |> fun (sections, stream) -> 
-        let pos = ref (stream.pos / 8) in
-        let sections = sections |> Array.map (fun x -> let v = !pos in pos := !pos + x; v) in
-        {stream; ptr=NullPtr; sections; caps=[||]; impls=empty_impls} |> c_read_ptr |> get (Group (t, None))
-
+      pop1 |> 
+      msg_to_struct t
   let to_bytes x = 
     let open Bigarray in
     let n = Array1.dim x in

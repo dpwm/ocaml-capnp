@@ -473,59 +473,89 @@ let ptrField : ('s, 'a) field -> ('s c, 'p) chainable -> ('a, 'p) chainable Lwt.
 
 
 
+let easy_read fd n =
+  let buf = Lwt_bytes.create n in
+  let rec loop o m = 
+    (* Actually read *)
+    let%lwt n = Lwt_bytes.recv fd buf o n [] in
+    if m = n then
+      Lwt.return buf
+    else
+      loop (o + n) (m - n)
+  in
+  let open Lwt.Infix in
+  loop 0 n >|= Uint8Array1.of_bytes
 
 
+external get_32 : Uint8Array1.t -> int -> int32 = "%caml_bigstring_get32"
 
+let read_capnprpc_msg fd = 
+  let%lwt header = easy_read fd 8 in
+  let nsegs = get_32 header 0 |> Int32.to_int |> ((+) 1) in
+  let seglengths = Array.make nsegs 0 in
+  seglengths.(0) <- get_32 header 4 |> Int32.to_int;
+  let total = ref seglengths.(0) in
+
+  let%lwt b = easy_read fd ((nsegs - 1) * 4) in
+
+  (* Force alignment *)
+  let%lwt _ = if nsegs land 1 = 0 then 
+    easy_read fd 4 
+  else
+    easy_read fd 0
+  in
+
+  if Array.length seglengths > 1 then
+    for i = 0 to nsegs - 2 do
+      let x = get_32 b (i * 4) |> Int32.to_int in
+      total := !total + x;
+      seglengths.(i+1) <- x;
+    done;
+
+  let%lwt data = easy_read fd (8 * !total)in
+
+  Lwt.return (Capnptk.Utils.from_bytes Rpc.Message.t seglengths data)
 
 
 
 let peer_loop peer = 
-  let buf = Lwt_bytes.create 2048 in
-  (* TODO: REMOVE HACKY HACK -- this should be easy.*)
-
   let rec f () = 
     let open Lwt.Infix in
     let%lwt _ = Lwt_unix.sleep 0.1 in
-    let%lwt n = Lwt_bytes.recv peer.fd buf 0 (Lwt_bytes.length buf) [] in
-    match n with
-    | 0 ->  f ()
-    | _ -> 
-        (
-        let open Capnptk in
-        let message = (Utils.decode Rpc.Message.t (Uint8Array1.of_bytes (Bigarray.Array1.sub buf 0 n))) in
+    let%lwt message = read_capnprpc_msg peer.fd in
+    let open Capnptk in
 
-        let open Rpc in
-        match message => Message.union with
-        | Return r -> 
-            Lwt_log.debug "A return!";%lwt
-            let qid = Declarative.(r => Return.answerId) in
-            Lwt.wakeup_later (peer.questions |> Int32Map.find qid) r;
+    let open Rpc in
+    match message => Message.union with
+    | Return r -> 
+        let qid = Declarative.(r => Return.answerId) in
+        Lwt.wakeup_later (peer.questions |> Int32Map.find qid) r;
+        f ()
+    | Call c -> 
+        Lwt_log.debug "A call!";%lwt
+        dispatch peer c;%lwt
+        f ()
+    | Bootstrap b ->
+        begin match peer.bootstrap with
+        | Some biface ->
+            biface |> ignore;
+            let qid = Rpc.Bootstrap.(b => questionId) in
+            Lwt_log.debug_f "bootstrap called %ld" qid;%lwt
+
+            let _, resolver = store_answer peer qid in
+
+            let answer = payload peer biface |> return_ok qid in
+            let af () = 
+              let%lwt r = send_return peer answer in
+              Lwt.wakeup_later resolver r;
+              Lwt.return ()
+            in
+            Lwt.async af;
             f ()
-        | Call c -> 
-            Lwt_log.debug "A call!";%lwt
-            dispatch peer c;%lwt
-            f ()
-        | Bootstrap b ->
-            begin match peer.bootstrap with
-            | Some biface ->
-                biface |> ignore;
-                let qid = Rpc.Bootstrap.(b => questionId) in
-                Lwt_log.debug_f "bootstrap called %ld" qid;%lwt
-
-                let _, resolver = store_answer peer qid in
-
-                let answer = payload peer biface |> return_ok qid in
-                let af () = 
-                  let%lwt r = send_return peer answer in
-                  Lwt.wakeup_later resolver r;
-                  Lwt.return ()
-                in
-                Lwt.async af;
-                f ()
-            | None -> failwith "bootstrap not set" 
-            end
-        | Abort e -> failwith (e => Rpc.Exception.reason)
-        | _ -> () |> Lwt.return >>= f)
+        | None -> failwith "bootstrap not set" 
+        end
+    | Abort e -> failwith (e => Rpc.Exception.reason)
+    | _ -> () |> Lwt.return >>= f
     in
     f ()
 
