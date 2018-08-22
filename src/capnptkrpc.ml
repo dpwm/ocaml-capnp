@@ -485,6 +485,7 @@ let peer_loop peer =
 
   let rec f () = 
     let open Lwt.Infix in
+    let%lwt _ = Lwt_unix.sleep 0.1 in
     let%lwt n = Lwt_bytes.recv peer.fd buf 0 (Lwt_bytes.length buf) [] in
     match n with
     | 0 ->  f ()
