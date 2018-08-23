@@ -1,5 +1,5 @@
 open Format
-open Capnptk.Declarative
+open Capnptk.Serialization.Declarative
 
 (* This can be done carefully *)
 type context = {
@@ -26,6 +26,8 @@ let comment comment fmt =
 
 let statement_open name fmt =
   fprintf fmt "open %s@ " name; fmt
+
+let ctklibs_open = statement_open "Capntk.Serialization.Declarative" 
 
 let interface_method iface a b name id fmt = 
   fprintf fmt "@ @[let %s = defmethod %s %s %s %d %S @]" name iface a b id name; fmt
@@ -80,7 +82,7 @@ let union_block fmt d xs =
     | (_, _, _, _) -> failwith "inconsistent"
   );
 
-  fprintf fmt "@ | n -> raise (Capnptk.OrdinalError n)";
+  fprintf fmt "@ | n -> raise (Capnptk.Serialization.OrdinalError n)";
   fprintf fmt "@]";
   fprintf fmt "@]@ in";
   fprintf fmt "@ @[<v 2>let g b = function";
@@ -108,7 +110,7 @@ let enum_type enumerants fmt =
   enumerants |> Array.iteri (fun i x ->
     fprintf fmt "@ | %d -> %s" i x;
   );
-  fprintf fmt "@ | n ->@ raise@ (Capnptk.OrdinalError n)";
+  fprintf fmt "@ | n ->@ raise@ (Capnptk.Serialization.OrdinalError n)";
   fprintf fmt "@ in@ let g =@ function";
   enumerants |> Array.iteri (fun i x ->
     fprintf fmt "@ | %s -> %d" x i;

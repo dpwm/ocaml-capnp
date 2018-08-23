@@ -1,4 +1,4 @@
-open Capnptk.Declarative
+open Serialization.Declarative
 
 
 (* A server is a collection of implementations *)
@@ -236,7 +236,7 @@ let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p)
     peer.questions <- peer.questions |> Int32Map.add question_id resolver;
 
     (* Fire the question *)
-    let msg = question_id |> msg |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
+    let msg = question_id |> msg |> Serialization.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
 
     (* Prepare a future for the result *)
 
@@ -304,7 +304,7 @@ let payload peer biface =
   )
 
 let send_msg peer x =
-  let msg = x |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
+  let msg = x |> Serialization.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
   let len = (Lwt_bytes.length msg) in
   let%lwt n = Lwt_bytes.send peer.fd msg 0 len [] in
   Lwt_log.debug_f "Sent %d bytes" n;%lwt
@@ -514,7 +514,7 @@ let read_capnprpc_msg fd =
 
   let%lwt data = easy_read fd (8 * !total)in
 
-  Lwt.return (Capnptk.Utils.from_bytes Rpc.Message.t seglengths data)
+  Lwt.return (Serialization.Utils.from_bytes Rpc.Message.t seglengths data)
 
 
 
@@ -522,7 +522,7 @@ let peer_loop peer =
   let rec f () = 
     let open Lwt.Infix in
     let%lwt message = read_capnprpc_msg peer.fd in
-    let open Capnptk in
+    let open Serialization in
 
     let open Rpc in
     match message => Message.union with

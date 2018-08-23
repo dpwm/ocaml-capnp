@@ -1,0 +1,5 @@
+(executable
+ (name main)
+  (public_name capnpc-ocamltk)
+  (libraries capnptk)
+)
