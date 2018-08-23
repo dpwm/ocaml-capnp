@@ -521,7 +521,6 @@ let read_capnprpc_msg fd =
 let peer_loop peer = 
   let rec f () = 
     let open Lwt.Infix in
-    let%lwt _ = Lwt_unix.sleep 0.1 in
     let%lwt message = read_capnprpc_msg peer.fd in
     let open Capnptk in
 

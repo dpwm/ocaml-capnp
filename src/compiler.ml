@@ -5,6 +5,16 @@ open Schema
 
 module StringSet = Set.Make(String)
 
+let modulename_of_filename x = 
+  (* We need to transform from lowercase to capitalized
+   * and also - -> _.
+   *
+   * *)
+    let b = String.index x '.' in
+    let a = try 1+String.rindex x '/' with Not_found -> 0 in
+    let base = String.sub x a (b-a) in
+    let v = String.capitalize_ascii base in
+    v |> String.map (function | '-' -> '_' | v -> v)
 
 let rec rstrip chr str =
   let l = String.length str in
@@ -14,38 +24,14 @@ let rec rstrip chr str =
     str
 
 let sanitize_name =
-  let keywords = StringSet.of_list [
-    "field";
-    "t";
-    "union";
-    "union_tag";
-    "c";
-    "sg";
-    "ig";
-    "type";
-    "union";
-    "object"; 
-    "module"; 
-    "struct"; 
-    "let"; 
-    "in"; 
-    "open"; 
-    "import"; 
-    "end"; 
-    "begin"; 
-    "done"; 
-    "for"; 
-    "do";
-    "true";
-    "false";
-    "method";
-    "Self";
-  ]
-   in
-   fun name ->
-     match StringSet.mem (rstrip '_' name) keywords with
-     | true -> name ^ "_"
-     | false -> name
+  let keywords = StringSet.of_list [ "field"; "t"; "union"; "union_tag"; "c";
+  "sg"; "ig"; "type"; "union"; "object"; "module"; "struct"; "let"; "in";
+  "open"; "import"; "end"; "begin"; "done"; "for"; "do"; "true"; "false";
+  "method"; "Self"; ] in
+  fun name ->
+    match StringSet.mem (rstrip '_' name) keywords with
+      | true -> name ^ "_"
+      | false -> name
 
 let node_name ?(capitalize=true) node =
   let p = node => Node.displayNamePrefixLength |> Int32.to_int in
@@ -59,9 +45,16 @@ let rec node_chain get_node node =
     | 0L -> [node]
     | id -> node :: (id |> get_node |> node_chain get_node)
 
+let default_combine v (x, l) = 
+  let l = List.hd l in
+  if l = v then
+    Printf.sprintf "Self.%s.t" x
+  else
+    Printf.sprintf "%s.%s.t" (modulename_of_filename l) x
 
 type state = {
   node : int64 -> Node.t;
+  combine : (string * string list) -> string;
   paths : string list Int64Map.t;
   path : string list;
   fmt : Format.formatter;
@@ -69,6 +62,7 @@ type state = {
 
 let push_path state x = {state with path = x :: state.path}
 let pop_path state = {state with path = List.tl state.path}
+let set_filename x state = {state with combine = default_combine x}
 
 let rec show_node_head (state:state) node =
   let open Codegen in
@@ -152,7 +146,8 @@ let qualified_name get_node node =
     List.partition (fun n -> 
       n => Node.union |> function | File -> false | _ -> true)
   in
-  (nodes |> List.map (node_name) |> List.rev |> String.concat ".", files |> List.map (get Node.displayName))
+  let nodes, files = (nodes |> List.map (node_name) |> List.rev |> String.concat ".", files |> List.map (get Node.displayName)) in
+  nodes, files
   
 
 let ocaml_literal value =
@@ -185,10 +180,12 @@ let ocaml_literal value =
 
   | AnyPointer _ -> None
 
+let named_type combine get_node id = 
+  id |> get_node |> qualified_name get_node |> combine
 
-let rec ocaml_type get_node typ =
+let rec ocaml_type combine get_node typ =
   let fmt = Printf.sprintf in
-  let named_type id = id |> get_node |> qualified_name get_node |> fst |> fmt "Self.%s.t" in
+  let named_type id = named_type combine get_node id in
   match typ => Type.union with
   | Void -> "unit"
   | Bool -> "bool"
@@ -205,7 +202,7 @@ let rec ocaml_type get_node typ =
   | Text -> "string"
   | Data -> "string"
   | List t -> 
-      t => Type.List.elementType |> ocaml_type get_node |> fmt "%s array"
+      t => Type.List.elementType |> ocaml_type combine get_node |> fmt "%s array"
   | Enum e -> 
       e => Type.Enum.typeId |> named_type
   | Struct e -> 
@@ -214,9 +211,9 @@ let rec ocaml_type get_node typ =
       i => Type.Interface.typeId |> named_type 
   | AnyPointer _ -> "unit c"
 
-let rec capnptk_type get_node typ =
+let rec capnptk_type combine get_node typ =
   let fmt = Printf.sprintf in
-  let named_type id = id |> get_node |> qualified_name get_node |> fst |> fmt "Self.%s.t" in
+  let named_type id = named_type combine get_node id in
   match typ => Type.union with
   | Void -> "Void"
   | Bool -> "Bool"
@@ -233,7 +230,7 @@ let rec capnptk_type get_node typ =
   | Text -> "Text"
   | Data -> "Data"
   | List t -> 
-      t => Type.List.elementType |> capnptk_type get_node |> fmt "(List %s)"
+      t => Type.List.elementType |> capnptk_type combine get_node |> fmt "(List %s)"
   | Enum e -> 
       e => Type.Enum.typeId |> named_type |> fmt "%s"
   | Struct e -> 
@@ -252,7 +249,7 @@ let capnptk_sizeof typ =
   | _ -> 1l
 
 
-let field_accessor get_node field =
+let field_accessor combine get_node field =
   match field => Field.union with
     | Slot slot when slot => Field.Slot.type_ => Type.union = Void -> 
         None
@@ -263,16 +260,19 @@ let field_accessor get_node field =
         | None -> ""
         in
         Some (Printf.sprintf "field t %s%s %ldl" 
-        (slot => Field.Slot.type_ |> capnptk_type get_node)
+        (slot => Field.Slot.type_ |> capnptk_type combine get_node)
         default
-        (Int32.mul (slot => Field.Slot.offset) (slot => Field.Slot.type_ |> capnptk_sizeof)))
+        (Int32.mul (slot => Field.Slot.offset) 
+        (slot => Field.Slot.type_ |> capnptk_sizeof)))
     | Group group -> 
-        Some (Printf.sprintf "group t (Self.%s.t)" (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst))
+        Some (group => Field.Group.typeId |> get_node |>
+        qualified_name get_node |> combine)
 
 let rec show_node_body (state:state) node =
   let open Codegen in
   let fmt = state.fmt in
   let get_node = state.node in
+  let combine = state.combine in
   let name = node_name node in
   let qualified, _ = qualified_name get_node node in
   match node => Node.union with
@@ -327,15 +327,15 @@ let rec show_node_body (state:state) node =
             union_fields |> Array.map (fun field -> 
               let constructor = field => Field.name |> String.capitalize_ascii in
               let tag = field => Field.discriminantValue in
-              let accessor = field |> field_accessor get_node in
+              let accessor = field |> field_accessor combine get_node in
 
               let typ = match field => Field.union with
               | Slot slot when slot => Field.Slot.type_ => Type.union = Void ->
                   None
               | Slot slot ->
-                  Some (slot => Field.Slot.type_ |> ocaml_type get_node)
+                  Some (slot => Field.Slot.type_ |> ocaml_type combine get_node)
               | Group group -> 
-                  Some (group => Field.Group.typeId |> get_node |> qualified_name get_node |> fst |> Printf.sprintf "Self.%s.t")
+                  Some (group => Field.Group.typeId |> get_node |> qualified_name get_node |> combine)
               in
               (constructor, typ, tag, accessor)
             ) |> union_block fmt tag_offset;
@@ -346,7 +346,7 @@ let rec show_node_body (state:state) node =
 
       fields |> Array.iter (fun field ->
         let open Field in
-        match field_accessor get_node field with
+        match field_accessor combine get_node field with
         | Some accessor ->
             let_statement (field => name |> sanitize_name) accessor fmt |> ignore;
         | None ->
@@ -378,7 +378,7 @@ let rec show_node_body (state:state) node =
                 Node.Struct.pointerCount) |> ignore;
                 s => Node.Struct.fields |> Array.iter (fun field -> 
                   let open Field in
-                  match field_accessor get_node field with
+                  match field_accessor combine get_node field with
                   | Some accessor -> 
                       let_statement (field => name |> sanitize_name) accessor fmt |> ignore;
                   | None -> 
@@ -398,7 +398,8 @@ let rec show_node_body (state:state) node =
 
       let get_node_name x = 
         try (Int64Map.find x internal_map |> Printf.sprintf "%s.t") 
-        with Not_found -> get_node x |> qualified_name get_node |> fst |> Printf.sprintf "Self.%s.t"
+        with Not_found -> 
+          get_node x |> qualified_name get_node |> combine
       in
 
       i => Node.Interface.methods |> Array.iteri (fun n m -> 
@@ -427,6 +428,8 @@ let rec show_node_body (state:state) node =
   | Annotation _ -> fmt
   (* We support no annotations *)
 
+
+
 let () =
   let cgr = Capnptk.Utils.(from_stdin () |> decode (CodeGeneratorRequest.t)) in
 
@@ -443,25 +446,21 @@ let () =
     fun k -> Int64Map.find k nodemap
   in
 
-  get_node |> ignore;
-
-  let state = {fmt; node=get_node; paths=Int64Map.empty;  path=[]} in
+  let state = {fmt; node=get_node; paths=Int64Map.empty;  path=[]; combine=default_combine ""} in
   
   let files = CodeGeneratorRequest.(cgr => requestedFiles |> Array.map (fun x -> 
     let buf = Buffer.create 65536 in
-    (x => RequestedFile.filename, x => RequestedFile.id, buf, Format.formatter_of_buffer buf))) in
+    (x => RequestedFile.filename, x => RequestedFile.id, buf, Format.formatter_of_buffer buf, x=>RequestedFile.imports))) in
 
   let state = files |> (state |> Array.fold_left (
-    fun state (filename, fid, _, fmt)  -> 
+    fun state (filename, fid, _, fmt, _)  -> 
       let state = {state with fmt} in
       fid |> get_node |> show_node_head (filename |> push_path state) |> pop_path
   )) in
 
-  files |> Array.iter (fun (filename, fid, buf, fmt) -> 
-    fid |> get_node |> show_node_body (filename |> push_path {state with fmt}) |> ignore;
+  files |> Array.iter (fun (filename, fid, buf, fmt, _) -> 
+    fid |> get_node |> show_node_body (filename |> push_path {state with fmt} |> set_filename filename) |> ignore;
     Format.pp_print_newline fmt ();
     Buffer.output_buffer stdout buf;
-
-    
   )
 

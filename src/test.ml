@@ -55,7 +55,7 @@ let () =
   let barserver name = 
     implement BarServer.t (fun x -> x |>
       declare BarServer.get (fun _ -> 
-        build BarServer.Get_Results.t (fun x -> x |> set BarServer.Get_Results.result name) |> Lwt.return)
+        build BarServer.Get_Results.t (fun x -> x |> set BarServer.Get_Results.result ("Barserver: " ^ name)) |> Lwt.return)
   ) in
   barserver "1" |> ignore;
 
@@ -63,11 +63,15 @@ let () =
     implement t (fun x -> 
       x |> 
       declare get1 (
-        fun _ -> Get1_Results.(
+        fun _ -> 
+          Lwt_unix.sleep 0.1;%lwt
+          Get1_Results.(
           build t (fun b -> b |> set result (barserver "Get1")
           ) |> Lwt.return)) |>
       declare get2 (
-        fun _ -> Get2_Results.(
+        fun _ -> 
+          Lwt_unix.sleep 0.1;%lwt
+          Get2_Results.(
           build t (fun b -> b |> set result (barserver "Get2")) |> Lwt.return))
       )) in
 
@@ -88,13 +92,23 @@ let () =
     Lwt.async (fun () -> peer_loop p2);
     let (>>=) = Lwt.Infix.(>>=) in
     let b = bootstrap Test_schema.FooServer.t p2 in 
-    let%lwt result = 
-      b >>=
-        Test_schema.FooServer.(call get1 (build Get1_Params.t (fun x -> x))) >>= 
+
+    let rec fz = function
+    | 0 ->
+        Lwt.return ()
+    | n ->
+        let%lwt r = b >>=
+          Test_schema.FooServer.(call get1 (build Get1_Params.t (fun x -> x))) >>= 
             ptrField FooServer.Get1_Results.result >>=
-                Test_schema.BarServer.(call get (build Get_Params.t (fun x -> x))) >>=
-                  result in
-    result |> ignore;
+              Test_schema.BarServer.(call get (build Get_Params.t (fun x -> x))) >>=
+                result in
+        (* r => Test_schema.BarServer.Get_Results.result |> Lwt_log.info;%lwt *)
+        r |> ignore;
+        fz (n - 1);
+    in
+
+    fz 10;%lwt
+
     Lwt_log.info "Call chain complete."
   in
 
