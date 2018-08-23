@@ -27,7 +27,7 @@ let comment comment fmt =
 let statement_open name fmt =
   fprintf fmt "open %s@ " name; fmt
 
-let ctklibs_open = statement_open "Capntk.Serialization.Declarative" 
+let ctklibs_open = statement_open "Capnptk.Serialization.Declarative" 
 
 let interface_method iface a b name id fmt = 
   fprintf fmt "@ @[let %s = defmethod %s %s %s %d %S @]" name iface a b id name; fmt
