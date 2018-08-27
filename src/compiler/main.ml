@@ -1,5 +1,5 @@
 module Int64Map = Map.Make(Int64)
-open Capnptk.Serialization.Declarative
+open Capnptk.Declarative
 open Schema
 
 
@@ -274,8 +274,8 @@ let field_accessor combine get_node field =
             (Int32.mul (slot => Field.Slot.offset) 
                (slot => Field.Slot.type_ |> capnptk_sizeof)))
   | Group group -> 
-    Some (group => Field.Group.typeId |> get_node |>
-          qualified_name get_node |> combine)
+    Some (Printf.sprintf "group t %s" (group => Field.Group.typeId |> get_node |>
+          qualified_name get_node |> combine))
 
 let rec show_node_body (state:state) node =
   let open Codegen in
@@ -428,9 +428,7 @@ let rec show_node_body (state:state) node =
 
   | Enum _ -> 
     fmt |>
-    open_body_module name |>
-    import_from_head qualified |> 
-    close_module 
+    copy_from_head name qualified
 
   | Const c -> 
     let name = node_name ~capitalize:false node |> sanitize_name in
@@ -439,7 +437,7 @@ let rec show_node_body (state:state) node =
   | Annotation _ -> fmt (* We support no annotations *)
 
 let () =
-  let cgr = Capnptk.Serialization.Utils.(from_stdin () |> decode (CodeGeneratorRequest.t)) in
+  let cgr = Capnptk.Utils.(from_stdin () |> decode (CodeGeneratorRequest.t)) in
 
   let fmt = Format.std_formatter in
   
@@ -480,4 +478,3 @@ let () =
       Buffer.output_buffer outchan buf;
       close_out outchan;
     )
-

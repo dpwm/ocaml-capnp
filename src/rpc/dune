@@ -1,0 +1,9 @@
+;; This declares the hello_world executable implemented by hello_world.ml
+
+(library
+  (name capnptk_rpc)
+  (public_name capnptk.rpc)
+  (libraries capnptk lwt lwt.unix lwt_log bigarray)
+  (preprocess (pps lwt_ppx))
+)
+

@@ -1,4 +1,4 @@
-open Serialization.Declarative
+open Capnptk.Declarative
 
 
 (* A server is a collection of implementations *)
@@ -236,13 +236,13 @@ let question : type t. (int32 -> Rpc.Message.t) -> t c g -> 'p peer -> (t c, 'p)
     peer.questions <- peer.questions |> Int32Map.add question_id resolver;
 
     (* Fire the question *)
-    let msg = question_id |> msg |> Serialization.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
+    let msg = question_id |> msg |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
 
     (* Prepare a future for the result *)
 
     let len = (Lwt_bytes.length msg) in
     Lwt_log.debug "Sending question";%lwt
-    let%lwt n = Lwt_bytes.send peer.fd msg 0 len [] in
+    let%lwt n = Lwt_bytes.write peer.fd msg 0 len in
     Lwt_log.debug_f "Done %d" n;%lwt
     (Lwt.bind promise (process_return typ peer), question_id, peer, []) |> Lwt.return
 
@@ -304,9 +304,9 @@ let payload peer biface =
   )
 
 let send_msg peer x =
-  let msg = x |> Serialization.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
+  let msg = x |> Capnptk.Utils.struct_to_bytes |> Uint8Array1.to_bytes in
   let len = (Lwt_bytes.length msg) in
-  let%lwt n = Lwt_bytes.send peer.fd msg 0 len [] in
+  let%lwt n = Lwt_bytes.write peer.fd msg 0 len in
   Lwt_log.debug_f "Sent %d bytes" n;%lwt
   Lwt.return ()
 
@@ -477,11 +477,12 @@ let easy_read fd n =
   let buf = Lwt_bytes.create n in
   let rec loop o m = 
     (* Actually read *)
-    let%lwt n = Lwt_bytes.recv fd buf o n [] in
+    let%lwt n = Lwt_bytes.read fd buf o n in
     if m = n then
       Lwt.return buf
     else
-      loop (o + n) (m - n)
+      let%lwt v = loop (o + n) (m - n) in
+      Lwt.return v
   in
   let open Lwt.Infix in
   loop 0 n >|= Uint8Array1.of_bytes
@@ -514,7 +515,7 @@ let read_capnprpc_msg fd =
 
   let%lwt data = easy_read fd (8 * !total)in
 
-  Lwt.return (Serialization.Utils.from_bytes Rpc.Message.t seglengths data)
+  Lwt.return (Capnptk.Utils.from_bytes Rpc.Message.t seglengths data)
 
 
 
@@ -522,7 +523,7 @@ let peer_loop peer =
   let rec f () = 
     let open Lwt.Infix in
     let%lwt message = read_capnprpc_msg peer.fd in
-    let open Serialization in
+    let open Capnptk in
 
     let open Rpc in
     match message => Message.union with
@@ -550,13 +551,16 @@ let peer_loop peer =
               Lwt.return ()
             in
             Lwt.async af;
-            f ()
+            let%lwt _ = f () in
+            Lwt.return ()
         | None -> failwith "bootstrap not set" 
         end
     | Abort e -> failwith (e => Rpc.Exception.reason)
     | _ -> () |> Lwt.return >>= f
     in
-    f ()
+    let%lwt _ = f () in
+    Lwt.return ()
+
 
 
 let peer_serve peer = 
