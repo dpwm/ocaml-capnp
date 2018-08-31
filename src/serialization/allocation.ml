@@ -6,7 +6,6 @@
  * this in a zero-copy way, using iter, and producing an iovector. For windows
  * support, we will have to resort to collapsing. *)
 
-
 type t =
   | Buffer of Data.t
   | Join of int * int * t * t
