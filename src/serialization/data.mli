@@ -1,16 +1,61 @@
-open Bigarray
-type t = (char, int8_unsigned_elt, c_layout) Array1.t
+ 
+module Bigstring : sig
+  type t
+end
 
-val of_string : string -> t
-(** Unoptimized conversion of string to bigstring. *)
+module type EndianOps = sig
+  type t
+  val get_int8 : t -> int -> int
+  val get_int16 : t -> int -> int
+  val get_int32 : t -> int -> int32
+  val get_int64 : t -> int -> int64
 
-val to_string : t -> string
-(** Unoptimized conversion of bigstring to string. *)
+  val set_int8 : t -> int -> int -> unit
+  val set_int16 : t -> int -> int -> unit
+  val set_int32 : t -> int -> int32 -> unit
+  val set_int64 : t -> int -> int64 -> unit
+end
 
-val get : t -> int -> char
-(** Unoptimized getting of an individual char. *)
+type 't ops = (module EndianOps with type t = 't)
+
+module type RopeSegmentOps = sig
+  type t
+  include EndianOps with type t := t
+
+  val to_string : t -> string
+  (** Unoptimized conversion to string. *)
+
+  val make : int -> t
+
+  val get : t -> int -> char
+
+  val length : t -> int
+
+  val split : t -> int -> (t * t)
+end
+
+type 'a rope_segment_ops = (module RopeSegmentOps with type t = 'a)
+
+module type RopeSegment = sig
+  include RopeSegmentOps
+  val value : t
+end
+
+
+val big_endian: 'a ops -> 'a ops
+val little_endian : 'a ops -> 'a ops
+val native_endian : 'a ops -> 'a ops
+
+type t = (module RopeSegment)
+
+val string : String.t rope_segment_ops
+val bigstring : Bigstring.t rope_segment_ops
 
 val length : t -> int
+
+val make : 'a rope_segment_ops -> int -> t
+val from : 'a rope_segment_ops -> 'a -> t
+val to_string : t -> string
 
 val get_int8 : t -> int -> int
 val get_int16 : t -> int -> int
@@ -22,17 +67,4 @@ val set_int16 : t -> int -> int -> unit
 val set_int32 : t -> int -> int32 -> unit
 val set_int64 : t -> int -> int64 -> unit
 
-module Buffer : sig
-  type t' = t
-  type t
-
-  val make : int -> t
-  (** Create a new buffer of size n. Note that unlike Buffer from the stdlib,
-    * this does not reallocate. *)
-
-  val add : t -> t' -> unit
-  (** Add to the end of the buffer *)
-
-  val contents : t -> t'
-  (** Extract the contents of the buffer *)
-end
+val split : t -> int -> (t * t)
