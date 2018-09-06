@@ -32,6 +32,7 @@ module type RopeSegmentOps = sig
   val make : int -> t
 
   val get : t -> int -> char
+  val set : t -> int -> char -> unit
 
   val length : t -> int
 
@@ -86,10 +87,10 @@ module Bigstring = struct
     Bytes.unsafe_to_string o
 
   let get x n = Array1.get x n
+  let set x n v = Array1.set x n v
 
   let split x n =
     let len = length x in
-    if n >= len then raise (Invalid_argument "split: out of range");
     Array1.sub x 0 n, Array1.sub x n (len - n)
 
   module type EndianOps' = EndianOps with type t = t
@@ -122,8 +123,10 @@ module String = struct
 
   let get x n = x.[n]
 
-  let split _ _ =
-    failwith "String is immutable"
+  let set _ _ _ = failwith "String is immutable"
+
+  let split x n =
+    String.sub x 0 n, String.sub x n (String.length x - n)
 
   module type EndianOps' = EndianOps with type t = t
 
@@ -152,10 +155,48 @@ module type RopeSegment = sig
   val value : t
 end
 
+type t = (module RopeSegment)
+
+module SubSegment = struct
+  type t = (module RopeSegment)
+  let make _ = failwith "String is immutable"
+
+  let length = String.length
+
+  let to_string x = x
+
+  let get (module T : RopeSegment) n =
+    T.get T.value n
+
+  let set (module T : RopeSegment) n v =
+    T.set T.value n v
+
+  let split _ _ =
+    failwith "cannot split"
+
+  module type EndianOps' = EndianOps with type t = t
+
+  type t' = t
+  module NativeEndianOps : EndianOps' = struct
+    type t = t'
+    external get_int8 : t -> int -> int = "%string_safe_get"
+    external get_int16 : t -> int -> int = "%caml_string_get16"
+    external get_int32 : t -> int -> int32 = "%caml_string_get32"
+    external get_int64 : t -> int -> int64 = "%caml_string_get64"
+
+    let set_int8 _ _ _ = failwith "String is read only"
+    let set_int64 = set_int8
+    let set_int32 = set_int8
+    let set_int16 = set_int8
+  end
+
+  module EndianOps = (val (native_endian (module NativeEndianOps : EndianOps')))
+  include (EndianOps : EndianOps with type t := t )
+end
+
 let string = (module String : RopeSegmentOps with type t = string)
 let bigstring = (module Bigstring : RopeSegmentOps with type t = Bigstring.t)
 
-type t = (module RopeSegment)
 
 let length (module M : RopeSegment) =
   M.length M.value
@@ -175,10 +216,16 @@ let from (type s) (module Ops : RopeSegmentOps with type t = s) x : t =
     let value = x
   end)
 
-let get_int8 (module X : RopeSegment) n =
+let get (module X : RopeSegment) n =
+  X.get X.value n
+
+let set (module X : RopeSegment) n v =
+  X.set X.value n v
+
+let get_uint8 (module X : RopeSegment) n =
   X.get_int8 X.value n
 
-let get_int16 (module X : RopeSegment) n =
+let get_uint16 (module X : RopeSegment) n =
   X.get_int16 X.value n
 
 let get_int32 (module X : RopeSegment) n =
@@ -187,10 +234,10 @@ let get_int32 (module X : RopeSegment) n =
 let get_int64 (module X : RopeSegment) n =
   X.get_int64 X.value n
 
-let set_int8 (module X : RopeSegment) n m =
+let set_uint8 (module X : RopeSegment) n m =
   X.set_int8 X.value n m
 
-let set_int16 (module X : RopeSegment) n m =
+let set_uint16 (module X : RopeSegment) n m =
   X.set_int16 X.value n m
 
 let set_int32 (module X : RopeSegment) n m =
@@ -199,7 +246,37 @@ let set_int32 (module X : RopeSegment) n m =
 let set_int64 (module X : RopeSegment) n m =
   X.set_int64 X.value n m
 
+let of_unsigned n x =
+  let m = 2 * n in
+  match x with
+  | x when x >= m || x < 0  ->
+    raise (Invalid_argument "Out of bounds")
+  | x when x >= n -> x - m
+  | x -> x
+
+let to_unsigned n x =
+  let m = 2 * n in
+  let x' = if x < 0 then x + m else x in
+  match x' with
+  | x when x >= m || x < 0  ->
+    raise (Invalid_argument "Out of bounds")
+  | x -> x
+
+let set_int8 x n m =
+  m |> to_unsigned 0x80 |> set_uint8 x n
+
+let set_int16 x n m =
+  m |> to_unsigned 0x8000 |> set_uint16 x n
+
+let get_int8 x n =
+  get_uint8 x n |> of_unsigned 0x80
+
+let get_int16 x n =
+  get_uint16 x n |> of_unsigned 0x8000
+
+
 let split (module X : RopeSegment) n =
+  (* This is really a convenient *)
   let a, b = X.split X.value n in
   (from (module X : RopeSegmentOps with type t = X.t) a,
   from (module X : RopeSegmentOps with type t = X.t) b)

@@ -132,5 +132,93 @@ let rec find n x =
       x |> d2 |> find n
     | _ -> x |> up |> find n
 
+let map f x =
+  match x.tree with
+  | Buffer x -> f x
+  | _ -> failwith "Cannot map over join"
 
 let empty = of_tree (buffer Data.(from string ""))
+
+let to_buffer buf x =
+  let rec f x = 
+    map (Data.to_string) x |> Buffer.add_string buf;
+    let x' = x |> float_right in
+    match x'.path with
+    | Root -> ()
+    | _ -> x' |> sink_left |> f
+  in
+  x |> float_top |> sink_left |> f
+
+let to_string x =
+  let len = full_length x in
+  if len = 0 then "" else
+  let buf = Buffer.create (full_length x) in
+  x |> find 0 |> to_buffer buf;
+  Buffer.contents buf
+
+let get n x =
+  let x = find n x in
+  let m = n - x.before in
+  map (fun d -> Data.get d m) x
+
+let rec pp_tree ppf =
+  let fmt f = Format.fprintf ppf f in
+  function
+  | Join (a, b, l, r) ->
+    fmt "@[<v 2>Join (%d, %d,@ " a b;
+    pp_tree ppf l;
+    fmt ",@ ";
+    pp_tree ppf r;
+    fmt ")@]"
+  | Buffer x ->
+    fmt "Buffer (Data.(from string) %S)" (Data.to_string x)
+
+let rec pp_path ppf =
+  let fmt f = Format.fprintf ppf f in
+  function
+  | Root ->
+    fmt "Root"
+  | Left x ->
+    fmt "Left {parent=";
+    pp_path ppf x.parent;
+    fmt "; right=";
+    pp_tree ppf x.right;
+    fmt "}";
+  | Right x -> 
+    fmt "Right {parent=";
+    pp_path ppf x.parent;
+    fmt "; left=";
+    pp_tree ppf x.left;
+    fmt "}"
+
+
+let pp ppf x =
+  let fmt f = Format.fprintf ppf f in
+  fmt "@[<v>{@[<v 2>@ path=";
+  pp_path ppf x.path;
+  fmt ";@ tree=";
+  pp_tree ppf x.tree;
+  fmt ";@ before=%d;@ after=%d@]@ }@]" x.before x.after
+
+let slice_to n x =
+  let x = find n x in
+  let m = n - x.before in
+  let a, _ = map (fun x -> Data.split x m) x in
+  let x = change (a |> buffer) x in
+
+  let rec f x =
+    (* climb up the subtree. If we find a left branch taken, jump it. *)
+    match x.after with
+      | _ ->
+        match x.path with
+        | Left _ -> x |> up |> change x.tree |> f
+        | Right _ -> x |> up |> f
+        | Root -> x
+  in
+
+  let o = x |> f in
+
+  if o.before != 0 then failwith "Before != 0";
+  if o.after != 0 then failwith (Printf.sprintf "After = %d != 0" x.after);
+  if full_length o != n then failwith "Length does not match";
+  o

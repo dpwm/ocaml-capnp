@@ -51,3 +51,14 @@ val float_top : t -> t
 val find : int -> t -> t
 
 val empty : t
+
+val to_buffer : Buffer.t -> t -> unit
+val to_string : t -> string
+
+val map : (Data.t -> 'b) -> t -> 'b
+
+val slice_to : int -> t -> t
+
+val pp : Format.formatter -> t -> unit
+
+val get : int -> t -> char
