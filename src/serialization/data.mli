@@ -22,8 +22,8 @@ module type RopeSegmentOps = sig
   type t
   include EndianOps with type t := t
 
-  val to_string : t -> string
-  (** Unoptimized conversion to string. *)
+  val to_buffer : t -> Buffer.t -> int -> int -> unit
+  (* conversion to buffer. *)
 
   val make : int -> t
 
@@ -58,6 +58,8 @@ val length : t -> int
 val make : 'a rope_segment_ops -> int -> t
 val from : 'a rope_segment_ops -> 'a -> t
 val to_string : t -> string
+val to_buffer : Buffer.t -> t -> unit
+val to_buffer_subrange : Buffer.t -> t -> int -> int -> unit
 
 val get : t -> int -> char
 val set : t -> int -> char -> unit

@@ -1,3 +1,6 @@
+test:
+	dune runtest
+
 default:
 	dune build @install
 

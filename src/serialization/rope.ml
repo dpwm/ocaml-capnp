@@ -120,7 +120,7 @@ let to_tree x =
 
 let rec find n x =
   if n >= full_length x then
-    failwith "Out of range"
+    raise @@ Invalid_argument "Out of range"
   else
     let v = n - x.before in
     match x.tree with
@@ -140,8 +140,8 @@ let map f x =
 let empty = of_tree (buffer Data.(from string ""))
 
 let to_buffer buf x =
-  let rec f x = 
-    map (Data.to_string) x |> Buffer.add_string buf;
+  let rec f x =
+    map (Data.to_buffer buf) x;
     let x' = x |> float_right in
     match x'.path with
     | Root -> ()
@@ -171,7 +171,7 @@ let rec pp_tree ppf =
     pp_tree ppf r;
     fmt ")@]"
   | Buffer x ->
-    fmt "Buffer (Data.(from string) %S)" (Data.to_string x)
+    fmt "Buffer (Data.(from string)) %S" (Data.to_string x)
 
 let rec pp_path ppf =
   let fmt f = Format.fprintf ppf f in
@@ -191,6 +191,8 @@ let rec pp_path ppf =
     pp_tree ppf x.left;
     fmt "}"
 
+let append r x =
+  change (cat x.tree r) x
 
 let pp ppf x =
   let fmt f = Format.fprintf ppf f in
@@ -201,24 +203,28 @@ let pp ppf x =
   fmt ";@ before=%d;@ after=%d@]@ }@]" x.before x.after
 
 let slice_to n x =
-  let x = find n x in
-  let m = n - x.before in
-  let a, _ = map (fun x -> Data.split x m) x in
-  let x = change (a |> buffer) x in
+  match n with
+  | n when full_length x = n -> x
+  | n when n < 0  || n > full_length x -> raise (Invalid_argument "Out of range")
+  | n ->
+    let x = find n x in
+    let m = n - x.before in
+    let a, _ = map (fun x -> Data.split x m) x in
+    let x = change (a |> buffer) x in
 
-  let rec f x =
-    (* climb up the subtree. If we find a left branch taken, jump it. *)
-    match x.after with
-      | _ ->
-        match x.path with
-        | Left _ -> x |> up |> change x.tree |> f
-        | Right _ -> x |> up |> f
-        | Root -> x
-  in
+    let rec f x =
+      (* climb up the subtree. If we find a left branch taken, jump it. *)
+      match x.after with
+        | _ ->
+          match x.path with
+          | Left _ -> x |> up |> change x.tree |> f
+          | Right _ -> x |> up |> f
+          | Root -> x
+    in
 
-  let o = x |> f in
+    let o = x |> f in
 
-  if o.before != 0 then failwith "Before != 0";
-  if o.after != 0 then failwith (Printf.sprintf "After = %d != 0" x.after);
-  if full_length o != n then failwith "Length does not match";
-  o
+    if o.before != 0 then failwith "Before != 0";
+    if o.after != 0 then failwith (Printf.sprintf "After = %d != 0" x.after);
+    if full_length o != n then failwith "Length does not match";
+    o

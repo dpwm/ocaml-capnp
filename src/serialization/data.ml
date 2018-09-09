@@ -19,15 +19,13 @@ module type EndianOps = sig
 end
 
 
-
 type 't ops = (module EndianOps with type t = 't)
 
 module type RopeSegmentOps = sig
   type t
   include EndianOps with type t := t
 
-  val to_string : t -> string
-  (** Unoptimized conversion to string. *)
+  val to_buffer : t -> Buffer.t -> int -> int -> unit
 
   val make : int -> t
 
@@ -77,17 +75,17 @@ module Bigstring = struct
 
   let length = Array1.dim
 
-
-  let to_string x =
-    let len = length x in
-    let o = Bytes.create len in
-    for i = 0 to (len - 1) do
-      Bytes.set o i x.{i};
-    done;
-    Bytes.unsafe_to_string o
-
   let get x n = Array1.get x n
   let set x n v = Array1.set x n v
+
+  let to_buffer x buf a l =
+    (*Printf.printf "\nTEST: %d %d %d\n\n" a l (length x); *)
+    if a + l > length x then
+      raise (Invalid_argument "Out of range");
+    for i = a to a + l - 1 do
+      Buffer.add_char buf (get x i)
+    done
+
 
   let split x n =
     let len = length x in
@@ -113,13 +111,14 @@ module Bigstring = struct
   include (EndianOps : EndianOps with type t := t )
 end
 
-module String = struct
+module DString = struct
   type t = string
   let make _ = failwith "String is immutable"
 
   let length = String.length
 
-  let to_string x = x
+  let to_buffer x buf a l =
+    Buffer.add_substring buf x a l
 
   let get x n = x.[n]
 
@@ -158,51 +157,60 @@ end
 type t = (module RopeSegment)
 
 module SubSegment = struct
-  type t = (module RopeSegment)
-  let make _ = failwith "String is immutable"
+  type t = (int * int * (module RopeSegment))
 
-  let length = String.length
+  let make _ = failwith "Cannot make a subsegment"
 
-  let to_string x = x
+  let length (_, len, _) =
+    len
 
-  let get (module T : RopeSegment) n =
-    T.get T.value n
+  let to_buffer (a', l', (module T : RopeSegment)) buf a l =
+    let a = a' + a in
+    let l = min l' l in
+    T.to_buffer T.value buf a l
 
-  let set (module T : RopeSegment) n v =
-    T.set T.value n v
+  let get (a, _, (module T : RopeSegment)) n =
+    T.get T.value (n - a)
+
+  let set (a, _, (module T : RopeSegment)) n v =
+    T.set T.value (n - a) v
 
   let split _ _ =
     failwith "cannot split"
 
-  module type EndianOps' = EndianOps with type t = t
+  let get_int8 (a, _, (module T: RopeSegment)) n =
+    T.get_int8 T.value (n-a)
 
-  type t' = t
-  module NativeEndianOps : EndianOps' = struct
-    type t = t'
-    external get_int8 : t -> int -> int = "%string_safe_get"
-    external get_int16 : t -> int -> int = "%caml_string_get16"
-    external get_int32 : t -> int -> int32 = "%caml_string_get32"
-    external get_int64 : t -> int -> int64 = "%caml_string_get64"
+  let get_int16 (a, _, (module T: RopeSegment)) n =
+    T.get_int16 T.value (n-a)
 
-    let set_int8 _ _ _ = failwith "String is read only"
-    let set_int64 = set_int8
-    let set_int32 = set_int8
-    let set_int16 = set_int8
-  end
+  let get_int32 (a, _, (module T: RopeSegment)) n =
+    T.get_int32 T.value (n-a)
 
-  module EndianOps = (val (native_endian (module NativeEndianOps : EndianOps')))
-  include (EndianOps : EndianOps with type t := t )
+  let get_int64 (a, _, (module T: RopeSegment)) n =
+    T.get_int64 T.value (n-a)
+
+  let set_int8 (a, _, (module T: RopeSegment)) n v =
+    T.set_int8 T.value (n-a) v
+
+  let set_int16 (a, _, (module T: RopeSegment)) n v =
+    T.set_int16 T.value (n-a) v
+
+  let set_int32 (a, _, (module T: RopeSegment)) n v =
+    T.set_int32 T.value (n-a) v
+
+  let set_int64 (a, _, (module T: RopeSegment)) n v =
+    T.set_int64 T.value (n-a) v
 end
 
-let string = (module String : RopeSegmentOps with type t = string)
+let string = (module DString : RopeSegmentOps with type t = String.t)
 let bigstring = (module Bigstring : RopeSegmentOps with type t = Bigstring.t)
+let subsegment = (module SubSegment : RopeSegmentOps with type t = SubSegment.t)
 
 
 let length (module M : RopeSegment) =
   M.length M.value
 
-let to_string  (module X : RopeSegment) : string =
-  X.to_string X.value
 
 let make (type s) (module Ops : RopeSegmentOps with type t = s) n : t =
   (module struct
@@ -274,9 +282,20 @@ let get_int8 x n =
 let get_int16 x n =
   get_uint16 x n |> of_unsigned 0x8000
 
-
-let split (module X : RopeSegment) n =
+let split (x : t) n =
   (* This is really a convenient *)
-  let a, b = X.split X.value n in
-  (from (module X : RopeSegmentOps with type t = X.t) a,
-  from (module X : RopeSegmentOps with type t = X.t) b)
+  let l = length x in
+  if n > l || n < 0 then raise (Invalid_argument "Out of range");
+  (from subsegment (0, n, x), from subsegment (n, l-n, x))
+
+let to_buffer_subrange buf (module X : RopeSegment) a l =
+  (* Printf.printf "SUBRANGE: %d %d %d\n" a l (X.length X.value)*)
+  X.to_buffer X.value buf a l
+
+let to_buffer buf x =
+  to_buffer_subrange buf x 0 (length x)
+
+let to_string (x : t) =
+  let b = Buffer.create (length x) in
+  to_buffer b x;
+  Buffer.contents b

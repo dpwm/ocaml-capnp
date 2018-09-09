@@ -62,3 +62,5 @@ val slice_to : int -> t -> t
 val pp : Format.formatter -> t -> unit
 
 val get : int -> t -> char
+
+val append : tree -> t -> t

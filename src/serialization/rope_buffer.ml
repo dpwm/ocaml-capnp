@@ -1,6 +1,6 @@
 (* This is a hybrid functional data structure based on rope zippers *)
 
-let alloc size = Data.make Data.bigstring size |> Rope.buffer 
+let alloc size = Data.make Data.bigstring size |> Rope.buffer
 
 type 'a t = {
   pos : int;
@@ -11,10 +11,6 @@ type 'a t = {
   result : 'a
   }
 
-let rope_append r x =
-  let open Rope in
-  change (cat x.tree r) x
-
 let expand x =
   let open Rope in
   let buf = alloc x.alloc_size in
@@ -24,7 +20,7 @@ let expand x =
   | 0 ->
     {x with alloc_size; rope = of_tree buf |> find x.pos; len}
   | _ ->
-  {x with alloc_size; len; rope=x.rope |> find (max 0 (x.len - 1)) |> rope_append buf |> find x.pos}
+  {x with alloc_size; len; rope=x.rope |> find (max 0 (x.len - 1)) |> Rope.append buf |> find x.pos}
 
 let push v x = {x with result = (v, x.result)}
 
@@ -39,14 +35,9 @@ let make ?(alloc_size=1024) () =
   } |> expand
 
 
-let rope_of_data x =
-  let open Rope in
-  x |> buffer |> of_tree
 
 let trim x =
-  let buf, _ = Rope.map (fun v -> Data.split v x.len) x.rope in
-  let rope = rope_of_data buf in
-  {x with rope}
+  {x with rope = Rope.slice_to x.pos x.rope}
 
 let check_space_for n = function
   | x when n <= x.len - x.pos  ->
@@ -59,7 +50,9 @@ let skip n x =
   {x with pos = x.pos + n}
 
 let to_cursor x =
-  {x with rope = Rope.find x.pos x.rope}
+  let x = x |> check_space_for 1 in
+  {x with rope = Rope.find x.pos x.rope
+  }
 
 let pos pos x =
   {x with pos} |> to_cursor
@@ -116,3 +109,11 @@ let read_int8 x =
 
 let to_rope x =
   x.rope |> Rope.slice_to x.pos
+
+let pp f x =
+  let fmt x = Format.fprintf f x in
+  fmt "@[<v>{@[<v 2>@ pos = %d;@ len = %d;@ rope = " x.pos x.len;
+  Rope.pp f x.rope;
+  fmt ";@ spare = ";
+  Rope.pp f x.spare;
+  fmt ";@ alloc_size = %d@]@ }@]" x.alloc_size

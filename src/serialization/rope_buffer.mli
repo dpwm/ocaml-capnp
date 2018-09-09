@@ -7,6 +7,7 @@ type 'a t = {
   result : 'a;
 }
 
+val pp : Format.formatter -> _ t -> unit
 val alloc : int -> Rope.tree
 
 val make : ?alloc_size:int -> unit -> unit t
