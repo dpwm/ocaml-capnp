@@ -1,3 +1,6 @@
+testbc:
+	dune build src/tests/fuzzer/ropebuffer/main.bc
+
 test:
 	dune runtest
 

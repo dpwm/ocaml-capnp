@@ -11,8 +11,12 @@ type 'a t = {
   result : 'a
   }
 
+let trim x =
+  {x with rope = Rope.slice_to x.pos x.rope; len = x.pos}
+
 let expand x =
   let open Rope in
+  let x = x |> trim in
   let buf = alloc x.alloc_size in
   let len = x.len + x.alloc_size in
   let alloc_size = x.alloc_size * 2 in
@@ -20,7 +24,7 @@ let expand x =
   | 0 ->
     {x with alloc_size; rope = of_tree buf |> find x.pos; len}
   | _ ->
-  {x with alloc_size; len; rope=x.rope |> find (max 0 (x.len - 1)) |> Rope.append buf |> find x.pos}
+    {x with alloc_size; len; rope=x.rope |> float_top |> Rope.append buf |> find x.pos}
 
 let push v x = {x with result = (v, x.result)}
 
@@ -36,14 +40,12 @@ let make ?(alloc_size=1024) () =
 
 
 
-let trim x =
-  {x with rope = Rope.slice_to x.pos x.rope}
 
 let check_space_for n = function
-  | x when n <= x.len - x.pos  ->
+  | x when n <= x.len - x.pos->
     x
   | x ->
-    trim x |> expand
+    x |> expand
 
 let skip n x =
   let x = x |> check_space_for n in
