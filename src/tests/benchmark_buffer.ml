@@ -1,9 +1,9 @@
 open Bigarray
 (* This takes
 
-real	0m1.444s
-user	0m1.143s
-sys	0m0.295s
+real	0m2.172s
+user	0m1.824s
+sys	0m0.339s
 
 *)
 
@@ -46,28 +46,28 @@ module type CONTAINED = sig
 end
 
 
-let buffer_write_integers m alloc =
+let buffer_write_integers m (alloc : int -> 't) get_int64 set_int64 =
   let b = alloc (m*8) in
-  let rec f : int -> t -> unit = fun n b ->
+  let rec f : int -> 't -> _ -> _ -> unit = fun n b get_int64 set_int64->
     match n with
     | n when n = m -> ()
     | n ->
       set_int64 b (n * 8) (Int64.of_int n);
-      f (n + 1) b
+      f (n + 1) b get_int64 set_int64
   in
-  f 0 b;
+  f 0 b get_int64 set_int64;
 
-  let rec g : int -> t -> unit = fun n b ->
+  let rec g : int -> 't -> _ -> _ -> unit = fun n b get_int64 set_int64 ->
     match n with
     | n when n = m -> ()
     | n ->
       let v = get_int64 b (n * 8) in
       if v <> (Int64.of_int n) then failwith "Mismatch";
-      g (n+1) b
+      g (n+1) b get_int64 set_int64
   in
-  g 0 b
+  g 0 b get_int64 set_int64
 
 
 let () =
   let m = 100000000 in
-  buffer_write_integers m bigstring_alloc
+  buffer_write_integers m BigString.alloc BigString.get_int64 BigString.set_int64
