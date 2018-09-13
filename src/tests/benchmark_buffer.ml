@@ -1,11 +1,13 @@
 open Bigarray
 (* This takes
 
-real	0m3.109s
-user	0m2.806s
-sys	0m0.286s
+real	0m2.487s
+user	0m2.162s
+sys	0m0.312s
 
 *)
+
+
 
 module BigString = struct
   type t = (char, int8_unsigned_elt, c_layout) Array1.t
@@ -19,6 +21,12 @@ module Bytes = struct
   let alloc m = Bytes.create m
   external set_int64 : t -> int -> int64 -> unit = "%caml_bytes_set64u" [@@noalloc]
   external get_int64 : t -> int -> int64 = "%caml_bytes_get64u"
+end
+
+class big_string (b:BigString.t) =
+  object
+    method get_int64 n = BigString.get_int64 b n
+    method set_int64 n v = BigString.set_int64 b n v
 end
 
 type t =
@@ -48,20 +56,20 @@ end
 
 let buffer_write_integers m alloc =
   let b = alloc (m*8) in
-  let rec f : int -> t -> unit = fun n b ->
+  let rec f : int -> _ -> unit = fun n b ->
     match n with
     | n when n = m -> ()
     | n ->
-      set_int64 b (n * 8) (Int64.of_int n);
+      b#set_int64 (n * 8) (Int64.of_int n);
       f (n + 1) b
   in
   f 0 b;
 
-  let rec g : int -> t -> unit = fun n b ->
+  let rec g : int -> _ -> unit = fun n b ->
     match n with
     | n when n = m -> ()
     | n ->
-      let v = get_int64 b (n * 8) in
+      let v = b#get_int64 (n * 8) in
       if v <> (Int64.of_int n) then failwith "Mismatch";
       g (n+1) b
   in
@@ -70,4 +78,4 @@ let buffer_write_integers m alloc =
 
 let () =
   let m = 100000000 in
-  buffer_write_integers m bigstring_alloc
+  buffer_write_integers m (fun m -> new big_string (BigString.alloc m) )
