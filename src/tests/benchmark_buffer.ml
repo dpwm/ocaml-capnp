@@ -1,9 +1,9 @@
 open Bigarray
 (* This takes
 
-real	0m1.444s
-user	0m1.143s
-sys	0m0.295s
+real	0m3.109s
+user	0m2.806s
+sys	0m0.286s
 
 *)
 
@@ -28,15 +28,15 @@ type t =
 let bytes_alloc n = Bytes (Bytes.alloc n)
 let bigstring_alloc n = Bigstring (BigString.alloc n)
 
-let set_int64 b n v =
+let set_int64 b =
   match b with
-  | Bytes b -> Bytes.set_int64 b n v
-  | Bigstring b -> BigString.set_int64 b n v
+  | Bytes b -> fun n v -> Bytes.set_int64 b n v
+  | Bigstring b -> fun n v -> BigString.set_int64 b n v
 
-let get_int64 b n =
+let get_int64 b =
   match b with
-  | Bytes b -> Bytes.get_int64 b n
-  | Bigstring b -> BigString.get_int64 b n
+  | Bytes b -> fun n -> Bytes.get_int64 b n
+  | Bigstring b -> fun n -> BigString.get_int64 b n
 
 module type CONTAINED = sig
   type t
