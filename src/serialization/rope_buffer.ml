@@ -27,6 +27,9 @@ let expand x =
     {x with alloc_size; len; rope=x.rope |> float_top |> Rope.append buf |> find x.pos}
 
 let push v x = {x with result = (v, x.result)}
+let pop x =
+  let (v, result) = x.result in
+  v, {x with result}
 
 let make ?(alloc_size=1024) () =
   {
@@ -50,7 +53,6 @@ let check_space_for n = function
 let skip n x =
   let x = x |> check_space_for n in
   {x with pos = x.pos + n}
-
 let to_cursor x =
   let x = x |> check_space_for 1 in
   {x with rope = Rope.find x.pos x.rope

@@ -12,6 +12,9 @@ val alloc : int -> Rope.tree
 
 val make : ?alloc_size:int -> unit -> unit t
 
+val push : 'b -> 'a t -> ('b * 'a) t
+val pop : ('b * 'a) t -> ('b * 'a t)
+
 val skip : int -> 'a t -> 'a t
 val pos : int -> 'a t -> 'a t
 

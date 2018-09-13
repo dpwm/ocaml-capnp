@@ -18,7 +18,7 @@ type list_ptr = {
 }
 
 type ptr =
-  | NullPtr 
+  | NullPtr
   | StructPtr of struct_ptr
   | ListPtr of list_ptr
   | CompositeListPtr of list_ptr * struct_ptr

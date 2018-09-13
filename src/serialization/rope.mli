@@ -11,6 +11,7 @@ type t = {
   path: path;
   tree: tree;
   before: int;
+  length: int;
   after: int;
 }
 
