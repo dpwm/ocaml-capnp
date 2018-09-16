@@ -48,15 +48,15 @@ let check_space_for n = function
   | x when n <= x.len - x.pos->
     x
   | x ->
-    x |> expand
+    x |> expand [@@inline]
 
 let skip n x =
   let x = x |> check_space_for n in
   {x with pos = x.pos + n}
+
 let to_cursor x =
   let x = x |> check_space_for 1 in
-  {x with rope = Rope.find x.pos x.rope
-  }
+  {x with rope = Rope.find x.pos x.rope} [@@inline]
 
 let pos pos x =
   {x with pos} |> to_cursor
@@ -73,19 +73,19 @@ let write_string s x =
   {x with rope; pos = x.pos + len; len = x.len + len} |> to_cursor
 
 let advance n x =
-  {x with pos = n + x.pos} |> to_cursor
+  to_cursor {x with pos = n + x.pos}
 
 let write f l n x =
   let open Rope in
-  let x = x |> to_cursor |> check_space_for l in
+  let x = x |> to_cursor |> (check_space_for [@inlined]) l in
   let m = x.pos - x.rope.before in
   map (f m n) x.rope;
-  x |> advance l
+  x |> advance l [@@inline]
 
 let read f l x =
   let open Rope in
   let m = x.pos - x.rope.before in
-  x |> push (map (f m) x.rope) |> advance l
+  x |> (push [@inlined]) ((map [@inlined]) (f m) x.rope) |> (advance [@inlined]) l [@@inline]
 
 let write_int64 n x =
   write (fun m n d -> Data.set_int64 d m n) 8 n x

@@ -2,4 +2,4 @@
  (dev
   (flags (:standard -annot)))
  (release
-  (flags (:standard -O3))))
+  (ocamlopt_flags (:standard -O3))))
