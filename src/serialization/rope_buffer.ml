@@ -85,7 +85,7 @@ let write f l n x =
 let read f l x =
   let open Rope in
   let m = x.pos - x.rope.before in
-  x |> (push [@inlined]) ((map [@inlined]) (f m) x.rope) |> (advance [@inlined]) l [@@inline]
+  x |> (push [@inlined]) (map (f m) x.rope) |> (advance [@inlined]) l [@@inline]
 
 let write_int64 n x =
   write (fun m n d -> Data.set_int64 d m n) 8 n x
