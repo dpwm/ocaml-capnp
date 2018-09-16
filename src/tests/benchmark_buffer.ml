@@ -1,9 +1,6 @@
 open Bigarray
 (* This takes
 
-real	0m2.487s
-user	0m2.162s
-sys	0m0.312s
 
 *)
 
@@ -54,28 +51,28 @@ module type CONTAINED = sig
 end
 
 
-let buffer_write_integers m alloc =
-  let b = alloc (m*8) in
-  let rec f : int -> _ -> unit = fun n b ->
+let buffer_write_integers m =
+  let b = BigString.alloc (m*8) in
+  let rec f : int -> BigString.t -> unit = fun n bb ->
     match n with
     | n when n = m -> ()
     | n ->
-      b#set_int64 (n * 8) (Int64.of_int n);
+      BigString.set_int64 bb (n * 8) (Int64.of_int n);
       f (n + 1) b
   in
   f 0 b;
 
-  let rec g : int -> _ -> unit = fun n b ->
+  let rec g : int -> BigString.t -> unit = fun n bb ->
     match n with
     | n when n = m -> ()
     | n ->
-      let v = b#get_int64 (n * 8) in
+      let v = BigString.get_int64 bb (n * 8) in
       if v <> (Int64.of_int n) then failwith "Mismatch";
-      g (n+1) b
+      g (n+1) bb
   in
   g 0 b
 
 
 let () =
-  let m = 100000000 in
-  buffer_write_integers m (fun m -> new big_string (BigString.alloc m) )
+  let m = 100_000_000 in
+  buffer_write_integers m 

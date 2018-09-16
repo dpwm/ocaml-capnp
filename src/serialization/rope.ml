@@ -136,14 +136,15 @@ let rec find n x =
   match x.tree with
   | Buffer _ when v >= 0 && v' < 0 ->
     x
-  | Join (a, _, _, _) when v >= 0 && v < a ->
-    x |> d1 |> find n
-  | Join (a, b, _, _) when v >= 0 && (v - a) < b ->
-    x |> d2 |> find n
-  | _ when n >= full_length x ->
-    raise @@ Invalid_argument "Out of range"
-
-  | _ -> x |> up |> find n
+  | _ -> begin match x.tree with
+    | Join (a, _, _, _) when v >= 0 && v < a ->
+      x |> d1 |> find n
+    | Join (a, b, _, _) when v >= 0 && (v - a) < b ->
+      x |> d2 |> find n
+    | _ when n >= full_length x ->
+      raise @@ Invalid_argument "Out of range"
+    | _ -> x |> up |> find n
+  end
 
 let map f x =
   match x.tree with

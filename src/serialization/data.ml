@@ -53,6 +53,7 @@ let big_endian (type t) (module EndianOps : EndianOps with type t = t) : t ops =
     let set_int32 b v x = x |> swap32 |> set_int32 b v
     let set_int64 b v x = x |> swap64 |> set_int64 b v
 
+
   end in
   (module Swapped)
 
@@ -70,7 +71,8 @@ module Bigstring = struct
   type t = (char, int8_unsigned_elt, c_layout) Array1.t
   let make n =
     let o = Array1.create char c_layout n in
-    Array1.fill o '\000';
+
+    (* Array1.fill o '\000'; *)
     o
 
   let length = Array1.dim
@@ -108,7 +110,7 @@ module Bigstring = struct
   end
 
   module EndianOps = (val (native_endian (module NativeEndianOps : EndianOps')))
-  include (EndianOps : EndianOps with type t := t )
+  include (EndianOps : EndianOps' with type t := t)
 end
 
 module DString = struct
