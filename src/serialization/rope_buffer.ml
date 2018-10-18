@@ -26,10 +26,10 @@ let expand x =
   | _ ->
     {x with alloc_size; len; rope=x.rope |> float_top |> Rope.append buf |> find x.pos}
 
-let push v x = {x with result = (v, x.result)}
+let push v x = {x with result = (v, x.result)} [@@inline]
 let pop x =
   let (v, result) = x.result in
-  v, {x with result}
+  v, {x with result} [@@inline]
 
 let make ?(alloc_size=1024) () =
   {
@@ -42,8 +42,6 @@ let make ?(alloc_size=1024) () =
   } |> expand
 
 
-
-
 let check_space_for n = function
   | x when n <= x.len - x.pos->
     x
@@ -52,10 +50,10 @@ let check_space_for n = function
 
 let skip n x =
   let x = x |> check_space_for n in
-  {x with pos = x.pos + n}
+  {x with pos = x.pos + n} [@@inline]
 
 let to_cursor x =
-  let x = x |> check_space_for 1 in
+  let x = x |> (check_space_for) 1 in
   {x with rope = Rope.find x.pos x.rope} [@@inline]
 
 let pos pos x =
@@ -72,8 +70,7 @@ let write_string s x =
   let rope = change (cat (buffer l) r) x.rope in
   {x with rope; pos = x.pos + len; len = x.len + len} |> to_cursor
 
-let advance n x =
-  to_cursor {x with pos = n + x.pos}
+let advance n x = to_cursor {x with pos = n + x.pos} [@@inline]
 
 let write f l n x =
   let open Rope in
@@ -88,7 +85,12 @@ let read f l x =
   x |> (push [@inlined]) (map (f m) x.rope) |> (advance [@inlined]) l [@@inline]
 
 let write_int64 n x =
-  write (fun m n d -> Data.set_int64 d m n) 8 n x
+  let open Rope in
+  let l = 8 in
+  let x = x |> to_cursor |> check_space_for l in
+  let m = x.pos - x.rope.before in
+  (map [@inlined]) (fun d -> (Data.set_int64 [@inlined]) d m n) x.rope;
+  (advance [@inlined]) l x [@@inline]
 
 let write_int32 n x =
   write (fun m n d -> Data.set_int32 d m n) 4 n x

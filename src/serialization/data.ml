@@ -242,7 +242,7 @@ let get_int32 (module X : RopeSegment) n =
   X.get_int32 X.value n
 
 let get_int64 (module X : RopeSegment) n =
-  X.get_int64 X.value n
+  X.get_int64 X.value n [@@inlined]
 
 let set_uint8 (module X : RopeSegment) n m =
   X.set_int8 X.value n m
@@ -254,7 +254,7 @@ let set_int32 (module X : RopeSegment) n m =
   X.set_int32 X.value n m
 
 let set_int64 (module X : RopeSegment) n m =
-  X.set_int64 X.value n m
+  X.set_int64 X.value n m [@@inlined]
 
 let of_unsigned n x =
   let m = 2 * n in

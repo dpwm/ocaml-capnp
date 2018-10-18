@@ -1,7 +1,8 @@
 let buffer_write_integers () =
   let m = 100_000_000 in
   let module RB = Capnptk.RopeBuffer in
-  let r = RB.make ~alloc_size:8 () in
+  let r = RB.make ~alloc_size:(1 +m*8) () in
+
   let rec f : int -> 'a RB.t -> 'a RB.t = fun n r ->
     match n with
     | n when n = m -> r

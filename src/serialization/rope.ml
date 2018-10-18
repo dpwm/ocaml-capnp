@@ -18,87 +18,80 @@ type path =
   | Right of {parent: path; left: tree}
 
 type t = {
+  before: int;
+  after: int;
   path: path;
   tree: tree;
-  before: int;
-  length: int;
-  after: int;
 }
 
-let length = function
-  | Buffer data -> Data.length data
-  | Join (a, b, _, _) -> a + b
+let tree_length = function
+  | Buffer data -> (Data.length [@inlined]) data
+  | Join (a, b, _, _) -> a + b [@@inline]
 
 let rec iter f = function
   | Buffer data -> f data
   | Join (_, _, x, y) ->
-      iter f x;
-      iter f y
+    iter f x;
+    iter f y
 
 let buffer x = Buffer x
 
 (* let flatten x = x |> to_data |> of_data *)
 
 
-let cat a b = Join (length a, length b, a, b)
+let cat a b = Join (tree_length a, tree_length b, a, b)
 
-let change tree x = {x with tree; length=length tree}
+let change tree x = {x with tree}
 
-let left {tree; path; before; after; length=len} = match path with
+let left {tree; path; before; after} = match path with
   | Root -> failwith "Cannot go left from root"
   | Left _ -> failwith "Cannot go left of left branch"
   | Right {left; parent} ->
-    let length = length left in
     {tree=left; path=Left {right=tree; parent};
-      before=(before - length);
-     after=(after + len);
-     length
+     before=(before - tree_length left);
+     after=(after + (tree_length tree) );
     }
 
-let right {tree; path; before; after; length=len} = match path with
+let right {tree; path; before; after} = match path with
   | Root -> failwith "Cannot go right from root"
   | Right _ -> failwith "Cannot go right from right branch"
   | Left {right; parent} ->
-    let length = length right in
     {tree=right; path=Right {left=tree; parent};
-      before=(before + len);
-     after=(after - length);
-     length
+     before=(before + tree_length tree);
+     after=(after - tree_length right)
     }
 
-let up {tree; path; before; after; length=len} = match path with
+let up {tree; path; before; after} = match path with
   | Root -> failwith "Cannot go up from root"
   | Left {parent; right} ->
-    let ll = len in
-    let lr = length right in
+    let ll = tree_length tree in
+    let lr = tree_length right in
     {tree=Join(ll, lr, tree, right); path=parent;
-     before; after=after - lr;
-     length = ll + lr
+     before; after=after - lr
     }
   | Right {parent; left} ->
-    let lr = len in
-    let ll = length left in
+    let ll = tree_length left in
+    let lr = tree_length tree in
     {tree=Join(ll, lr, left, tree); path=parent;
-     after; before=before - ll;
-     length=ll + lr}
+     after; before=before - ll}
 
 let d1 {tree; path; before; after; _} = match tree with
   | Buffer _ -> failwith "Cannot go down from leaf node"
   | Join (a, b, left, right) ->
     {tree=left; path=Left {right; parent=path};
-      before; after=after + b; length=a}
+     before; after=after + b}
 
 let d2 {tree; path; before; after; _} = match tree with
   | Buffer _ -> failwith "Cannot go down from leaf node"
   | Join (a, b, left, right) ->
     {tree=right; path=Right {left; parent=path};
-      after; before=before + a; length=b}
+     after; before=before + a}
 
-let of_tree tree =
-  {tree; path=Root; before=0; after=0; length=length tree}
+let of_tree tree = {tree; path=Root; before=0; after=0}
 
 
-let full_length {before; after; length; _} = before + after + length
+let full_length {before; after; tree; _} =
+  before + after + tree_length tree
 
 let rec sink_left x =
   match x.tree with
@@ -130,26 +123,30 @@ let rec float_top x =
 let to_tree x =
   (x |> float_top).tree
 
-let rec find n x =
-  let v = n - x.before in
-  let v' = v - x.length in
-  match x.tree with
-  | Buffer _ when v >= 0 && v' < 0 ->
-    x
-  | _ -> begin match x.tree with
+let find n x =
+  let rec f n x =
+    let v = n - x.before in
+    let v' = v - (tree_length [@inlined]) x.tree in
+    match x.tree with
+    | Buffer _ when v >= 0 && v' < 0 ->
+      x
     | Join (a, _, _, _) when v >= 0 && v < a ->
-      x |> d1 |> find n
+      f n (d1 x)
     | Join (a, b, _, _) when v >= 0 && (v - a) < b ->
-      x |> d2 |> find n
+      f n (d2 x)
     | _ when n >= full_length x ->
       raise @@ Invalid_argument "Out of range"
-    | _ -> x |> up |> find n
-  end
+    | _ -> x |> up |> f n
+  in
+  let check_in_range n x =
+    if n < x.before then f n x else x
+   in
+   (f [@unrolled 2] [@specialized]) n x
 
 let map f x =
   match x.tree with
   | Buffer x -> f x
-  | _ -> failwith "Cannot map over join"
+  | _ -> failwith "Cannot map over join" [@@inline]
 
 let empty = of_tree (buffer Data.(from string ""))
 
@@ -166,9 +163,9 @@ let to_buffer buf x =
 let to_string x =
   let len = full_length x in
   if len = 0 then "" else
-  let buf = Buffer.create (full_length x) in
-  x |> find 0 |> to_buffer buf;
-  Buffer.contents buf
+    let buf = Buffer.create (full_length x) in
+    x |> find 0 |> to_buffer buf;
+    Buffer.contents buf
 
 let get n x =
   let x = find n x in
@@ -229,11 +226,11 @@ let slice_to n x =
     let rec f x =
       (* climb up the subtree. If we find a left branch taken, jump it. *)
       match x.after with
-        | _ ->
-          match x.path with
-          | Left _ -> x |> up |> change x.tree |> f
-          | Right _ -> x |> up |> f
-          | Root -> x
+      | _ ->
+        match x.path with
+        | Left _ -> x |> up |> change x.tree |> f
+        | Right _ -> x |> up |> f
+        | Root -> x
     in
 
     let o = x |> f in

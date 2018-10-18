@@ -8,14 +8,13 @@ type path =
   | Right of {parent: path; left: tree}
 
 type t = {
+  before: int;
+  after: int;
   path: path;
   tree: tree;
-  before: int;
-  length: int;
-  after: int;
 }
 
-val length : tree -> int
+val tree_length : tree -> int
 (** Get the overall length of this rope *)
 
 val iter : (Data.t -> unit) -> tree -> unit
