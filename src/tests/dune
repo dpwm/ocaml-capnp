@@ -1,0 +1,9 @@
+(executable
+ (name fstream)
+  (public_name fstream)
+  (libraries capnptk alcotest)
+)
+
+(alias
+(name runtest)
+(action (run ./fstream.exe)))
