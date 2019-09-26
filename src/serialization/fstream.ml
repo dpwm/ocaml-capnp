@@ -27,9 +27,23 @@ module type S = sig
   val create : int -> t
   val of_bytes : Bytes.t -> t
   val expand : t -> int -> unit
+  val check : t -> int -> unit
   val blit_string : t -> int -> string -> unit
   val length : t -> int
 end
+
+module Pos = struct
+  type t = {seg : int; off : int}
+
+  let empty = {seg = 0; off = 0}
+
+  let rewind n pos =
+    {pos with off = pos.off - n}
+
+  let setoff off pos =
+    {pos with off}
+end
+
 
 module type T = sig
   type data
@@ -53,11 +67,14 @@ module type T = sig
   val write_i16 : t -> int -> unit
   val write_i8  : t -> int -> unit
 
-  val pos : t -> int
-  val setpos : t -> int -> unit
+  val posmap : t -> (Pos.t -> Pos.t) -> unit
+  val pos : t -> Pos.t
+  val setpos : t -> Pos.t -> unit
   val align : t -> int -> unit
   val push : t -> unit
   val pop : t -> unit
+
+  val length : t -> int
 end
 
 module ByteS = struct
@@ -127,70 +144,98 @@ end
 
 module Make(S : S) = struct
   type data = S.t
-  type t = {mutable pos : int; mutable stack : int list; data: data}
+  type t = {mutable pos : Pos.t; mutable stack : Pos.t list; mutable data: data array}
+
 
   let create n =
-    let data = S.create n in
-    {pos=0; stack=[]; data}
+    let data = [| S.create n |] in
+    {pos=Pos.empty; stack=[]; data}
 
-  let read_i64 x =
-    let o = S.read_i64 x.data x.pos in
-    x.pos <- x.pos + 8;
-    o
+  let check x n =
+    try
+      let off = x.pos.off + n in
+      S.check x.data.(x.pos.seg) off;
+      {x.pos with off}
+    with End_of_file ->
+      begin
+        try
+          let seg = x.pos.seg + 1 in
+          S.check x.data.(seg) (n);
+          {seg; off = n}
+        with
+        | Invalid_argument _ ->
+          raise End_of_file
+      end
 
-  let read_i32 x =
-    let o = S.read_i32 x.data x.pos in
-    x.pos <- x.pos + 4;
-    o
+  let expand x n =
+    (* reserve a contiguous block *)
+    try
+      S.expand x.data.(x.pos.seg) (x.pos.off + n);
+      {x.pos with off = x.pos.off + n}
+    with End_of_file -> begin
+        let seg = x.pos.seg + 1 in
+        try
+          S.expand x.data.(seg) (n);
+          {seg; off = n}
+        with
+        | Invalid_argument _ ->
+          let len = max (2 * (S.length x.data.(seg-1))) n in
+          let b = S.create len in
+          x.data <- Array.append x.data [| b |];
+          {seg; off=n}
 
-  let read_u16 x =
-    let o = S.read_u16 x.data x.pos in
-    x.pos <- x.pos + 2;
-    o
+      end
+
+
+  let check_pos x n f =
+    x.pos <- check x n;
+    let pos = Pos.rewind n x.pos in
+    f x.data.(pos.seg) pos.off
+
+  let expand_pos x n v f =
+    x.pos <- expand x n;
+    let pos = Pos.rewind n x.pos in
+    f x.data.(pos.seg) pos.off v
+
+  let read_i64 x = check_pos x 8 S.read_i64
+
+  let read_i32 x = check_pos x 4 S.read_i32
+
+  let read_u16 x = check_pos x 2 S.read_u16
+
+  let read_u8 x = check_pos x 1 S.read_u8
 
   let read_i16 x =
     let v = read_u16 x in
     let k = Sys.int_size - 16 in
     (v lsl k) asr k
 
-
-  let read_u8 x =
-    let o = S.read_u8  x.data x.pos in
-    x.pos <- x.pos + 1;
-    o
-
   let read_i8 x =
     let v = read_u8 x in
     let k = Sys.int_size - 8 in
     (v lsl k) asr k
 
-  let write_i64 x v =
-    S.write_i64 x.data x.pos v;
-    x.pos <- x.pos + 8
+  let write_i64 x v = expand_pos x 8 v S.write_i64
 
-  let write_i32 x v =
-    S.write_i32 x.data x.pos v;
-    x.pos <- x.pos + 4
+  let write_i32 x v = expand_pos x 4 v S.write_i32
 
-  let write_u16 x v =
-    S.write_u16 x.data x.pos v;
-    x.pos <- x.pos + 2
+  let write_u16 x v = expand_pos x 2 v S.write_u16 
+
+  let write_u8 x v = expand_pos x 1 v S.write_u8 
 
   let write_i16 = write_u16
-
-  let write_u8  x v =
-    S.write_u8 x.data x.pos v;
-    x.pos <- x.pos + 1
 
   let write_i8 = write_u8
 
   let pos x = x.pos
 
+  let posmap x f = x.pos <- f x.pos
+
   let setpos x pos = x.pos <- pos
 
   let align x n =
     let round_up d n = (((n - 1) / d) + 1) * d in
-    x.pos <- round_up n x.pos
+    x.pos <- {x.pos with off = round_up n x.pos.off}
 
   let push x =
     x.stack <- x.pos :: x.stack
@@ -201,6 +246,9 @@ module Make(S : S) = struct
       x.stack <- xs;
       x.pos <- pos
     | _ -> ()
+
+  let length x =
+    x.data |> Array.fold_left (fun x v -> x + S.length v) 0
 end
 
 module ByteStream = Make(ByteS)

@@ -14,11 +14,21 @@ module type S = sig
   val create: int -> t
   val of_bytes : Bytes.t -> t
   val expand : t -> int -> unit
+  val check : t -> int -> unit
   val blit_string : t -> int -> string -> unit
   val length : t -> int
 end
 
 module ByteS : S
+
+module Pos : sig
+  type t = {seg : int; off : int}
+
+  val empty : t
+
+  val rewind : int -> t -> t
+  val setoff : int -> t -> t
+end
 
 module type T = sig
   type data
@@ -42,11 +52,14 @@ module type T = sig
   val write_i16 : t -> int -> unit
   val write_i8  : t -> int -> unit
 
-  val pos : t -> int
-  val setpos : t -> int -> unit
+  val posmap : t -> (Pos.t -> Pos.t) -> unit
+  val pos : t -> Pos.t
+  val setpos : t -> Pos.t -> unit
   val align : t -> int -> unit
   val push : t -> unit
   val pop : t -> unit
+
+  val length : t -> int
 end
 
 module Make (S:S) : T with type data = S.t

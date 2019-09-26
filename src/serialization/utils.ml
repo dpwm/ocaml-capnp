@@ -42,7 +42,7 @@ let decode : type a. a sg -> data -> a sgu =
   let open Stream in
   cursor data |>
   read_header |>
-  pop1 |> 
+  pop1 |>
   msg_to_struct t
 
 let to_bytes x =
