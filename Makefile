@@ -1,14 +1,14 @@
-testbc:
-	dune build src/tests/fuzzer/ropebuffer/main.bc
-
 test:
-	dune runtest
+	dune runtest -f
 
 default:
 	dune build @install
 
 install: default
 	dune install
+
+uninstall:
+	dune uninstall
 
 clean:
 	dune clean

@@ -1,0 +1,10 @@
+(executable
+ (name decode)
+  (public_name decode)
+  (libraries capnptk alcotest)
+)
+
+(alias
+(name runtest)
+(deps test.bin test_container.bin)
+(action (run ./decode.exe)))

@@ -19,6 +19,8 @@ module type S = sig
   val read_u16 : t -> int -> int
   val read_u8  : t -> int -> int
 
+  val read_string : t -> int -> int -> string
+
   val write_i64 : t -> int -> int64 -> unit
   val write_i32 : t -> int -> int32 -> unit
   val write_u16 : t -> int -> int -> unit
@@ -37,11 +39,19 @@ module Pos = struct
 
   let empty = {seg = 0; off = 0}
 
+  let show {seg; off} = Printf.sprintf "{seg=%d; off=%d}" seg off
+
   let rewind n pos =
     {pos with off = pos.off - n}
 
   let setoff off pos =
     {pos with off}
+
+  let mov v pos =
+    {pos with off = pos.off + v}
+
+  let movw v pos =
+    {pos with off = pos.off + 8 * v}
 end
 
 
@@ -50,6 +60,7 @@ module type T = sig
   type t
 
   val create : int -> t
+  val of_byte_array : Bytes.t array -> t
 
   val read_i64 : t -> int64
   val read_i32 : t -> int32
@@ -58,6 +69,8 @@ module type T = sig
 
   val read_i16 : t -> int
   val read_i8  : t -> int
+
+  val read_string : t -> int -> string
 
   val write_i64 : t -> int64 -> unit
   val write_i32 : t -> int32 -> unit
@@ -73,8 +86,12 @@ module type T = sig
   val align : t -> int -> unit
   val push : t -> unit
   val pop : t -> unit
+  val with_push : (t -> 'a) -> t -> 'a
+  val clone : t -> t
 
   val length : t -> int
+
+  val showpos : t -> string
 end
 
 module ByteS = struct
@@ -94,6 +111,8 @@ module ByteS = struct
       x.n <- n'
     else
       raise End_of_file
+
+  let read_string x a len = Bytes.sub_string x.bs a len
 
   let read_i64 x n =
     check x (n+8);
@@ -146,6 +165,9 @@ module Make(S : S) = struct
   type data = S.t
   type t = {mutable pos : Pos.t; mutable stack : Pos.t list; mutable data: data array}
 
+  let of_byte_array bs =
+    let data = Array.map S.of_bytes bs in
+    {pos=Pos.empty; stack=[]; data}
 
   let create n =
     let data = [| S.create n |] in
@@ -160,8 +182,9 @@ module Make(S : S) = struct
       begin
         try
           let seg = x.pos.seg + 1 in
-          S.check x.data.(seg) (n);
-          {seg; off = n}
+          let off = n in 
+          S.check x.data.(seg) off;
+          {seg; off}
         with
         | Invalid_argument _ ->
           raise End_of_file
@@ -219,9 +242,9 @@ module Make(S : S) = struct
 
   let write_i32 x v = expand_pos x 4 v S.write_i32
 
-  let write_u16 x v = expand_pos x 2 v S.write_u16 
+  let write_u16 x v = expand_pos x 2 v S.write_u16
 
-  let write_u8 x v = expand_pos x 1 v S.write_u8 
+  let write_u8 x v = expand_pos x 1 v S.write_u8
 
   let write_i16 = write_u16
 
@@ -235,7 +258,9 @@ module Make(S : S) = struct
 
   let align x n =
     let round_up d n = (((n - 1) / d) + 1) * d in
-    x.pos <- {x.pos with off = round_up n x.pos.off}
+    let delta = round_up n x.pos.off - x.pos.off in
+    let pos = expand x delta in
+    x.pos <- pos
 
   let push x =
     x.stack <- x.pos :: x.stack
@@ -249,6 +274,22 @@ module Make(S : S) = struct
 
   let length x =
     x.data |> Array.fold_left (fun x v -> x + S.length v) 0
+
+  let with_push f x =
+    push x;
+    let o = f x in
+    pop x;
+    o
+
+  let clone x =
+    {x with pos=x.pos}
+
+  let read_string x len = check_pos x len (fun bs off -> S.read_string bs off len)
+
+  let showpos {pos;_} =
+    Printf.sprintf "%d:%d" pos.seg pos.off
+
+
 end
 
 module ByteStream = Make(ByteS)
