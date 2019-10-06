@@ -31,7 +31,7 @@ type ptr =
   | CapabilityPtr of int
 
 let show_ptr = 
- let f = Printf.sprintf in
+  let f = Printf.sprintf in
   let show_struct_ptr {dwords; pwords} = f "{dwords=%d; pwords=%d}" dwords pwords in
   let show_list_ptr {typ; nelem} = f "{typ=%d; nelem=%d}" typ nelem in
   function
@@ -217,39 +217,39 @@ let c_read_ptr c =
     let i = ByteStream.read_i64 c.stream in
 
     match read_bits_64u 0 2 i with
-      | 0L ->
-        let offs, dwords, pwords = read_struct_ptr i in
-        ByteStream.posmap c.stream (Pos.movw offs);
-        StructPtr {dwords; pwords}
-      | 1L ->
-        let offs, typ, nelem = read_list_ptr i in
-        ByteStream.posmap c.stream (Pos.movw offs);
-        if typ = 7 then
-          let i' = ByteStream.read_i64 c.stream in
-          let nelem, dwords, pwords = read_struct_ptr i' in
-          CompositeListPtr ({typ; nelem}, {dwords; pwords})
-        else
-          ListPtr {typ; nelem}
-      | 2L ->
-        let double, off, seg = read_far_ptr i in
-        let tpos = Pos.{seg; off} in
-        FarPtr {tpos; double}
-      | 3L ->
-        CapabilityPtr (read_cap_ptr i)
-      | _ -> failwith "invalid pointer read"
+    | 0L ->
+      let offs, dwords, pwords = read_struct_ptr i in
+      ByteStream.posmap c.stream (Pos.movw offs);
+      StructPtr {dwords; pwords}
+    | 1L ->
+      let offs, typ, nelem = read_list_ptr i in
+      ByteStream.posmap c.stream (Pos.movw offs);
+      if typ = 7 then
+        let i' = ByteStream.read_i64 c.stream in
+        let nelem, dwords, pwords = read_struct_ptr i' in
+        CompositeListPtr ({typ; nelem}, {dwords; pwords})
+      else
+        ListPtr {typ; nelem}
+    | 2L ->
+      let double, off, seg = read_far_ptr i in
+      let tpos = Pos.{seg; off} in
+      FarPtr {tpos; double}
+    | 3L ->
+      CapabilityPtr (read_cap_ptr i)
+    | _ -> failwith "invalid pointer read"
 
   in
   begin match read_ptr c with
-  | FarPtr {double=false; tpos} ->
-    ByteStream.setpos c.stream tpos;
-    c.ptr <- read_ptr c
-  | FarPtr {double=true; _} ->
-    failwith "Double-far pointer not implemented"
-  | ptr -> c.ptr <- ptr end;
+    | FarPtr {double=false; tpos} ->
+      ByteStream.setpos c.stream tpos;
+      c.ptr <- read_ptr c
+    | FarPtr {double=true; _} ->
+      failwith "Double-far pointer not implemented"
+    | ptr -> c.ptr <- ptr end;
   c
 
 
-let get : type a s. (s, a) field -> s c -> a =
+let rec get : type a s. (s, a) field -> s c -> a =
   fun field c ->
   ByteStream.push c.stream;
   let found, b, t, default = mov_field field c in
@@ -287,29 +287,38 @@ let get : type a s. (s, a) field -> s c -> a =
         Printf.printf "Read list\n";
         let c = c_read_ptr c in
         begin match c.ptr with
-        | CompositeListPtr (lptr, sptr) ->
-          c.ptr <- StructPtr sptr;
-          let swords = sptr.pwords + sptr.dwords in
-          let elem i =
-            let c = c_clone c in
-            ByteStream.posmap c.stream (Pos.movw (i * swords));
-            c
-          in
-          let out = Array.init lptr.nelem elem in
-          out
-        | NullPtr -> [| |]
-        | _ ->
-          failwith @@ "Expected Composite List Pointer or Null Pointer"
+          | CompositeListPtr (lptr, sptr) ->
+            c.ptr <- StructPtr sptr;
+            let swords = sptr.pwords + sptr.dwords in
+            let elem i =
+              let c = c_clone c in
+              ByteStream.posmap c.stream (Pos.movw (i * swords));
+              c
+            in
+            let out = Array.init lptr.nelem elem in
+            out
+          | NullPtr -> [| |]
+          | _ ->
+            failwith @@ "Expected Composite List Pointer or Null Pointer"
         end
-      | List _t ->
+      | List t ->
+        let sptr = c.ptr in
         let c = c_read_ptr c in
         show_ptr c.ptr |> print_endline;
-        begin match c.ptr with
+        let o = match c.ptr with
           | NullPtr -> failwith "null"
-          | ListPtr {nelem; typ=2} when nelem > 0 ->
-            failwith "null"
+          | ListPtr {nelem; typ} when typ = 2 ->
+            let s = match typ with | 2 -> 1 | 3 -> 2 | 4 -> 4 | 5 -> 8 | _ -> failwith "invalid size" in
+            let c' = {c with ptr=StructPtr {pwords=0; dwords=(nelem * s + 7) / 8}}  in
+            let f i =
+              let f = Field (i * s, 0, t, None) in
+              get f c'
+            in
+            Array.init nelem f
           | _ -> failwith ("ERROR: " ^ show_ptr c.ptr)
-        end
+        in
+        c.ptr <- sptr;
+        o
       | Data -> 
         let c = c_read_ptr c in
         begin match c.ptr with
@@ -336,12 +345,21 @@ let get : type a s. (s, a) field -> s c -> a =
           | _ -> failwith "Not a struct or null ptr"
         end;
         c_clone c;
-      | _ -> failwith "unrecognised"
+      | Ptr _ ->
+        failwith "Unimplemented pointer"
+      | Struct _ ->
+        failwith "Cannot unpack naked struct"
+      | Union _ ->
+        failwith "Union unimplmented"
+      | Enum _ ->
+        failwith "Enum uinimplemented"
+      | Interface _ ->
+        failwith "Interface unimplemented"
     in
     ByteStream.pop c.stream;
     ret
   end
-  else failwith "unimplmeneted"
+  else failwith "unimplemented?"
 
 
 let set _ _ _ =
@@ -353,22 +371,22 @@ let (=>) c x =
 let (=<) x c v = set x c v
 
 (* let cast_struct : type a b. a g -> b g -> a -> b =
-  fun _t1 _t2 ->
-  failwith "Not implemented"
-(* 
-  match (t1, t2) with
-  | (Ptr Void, Ptr Struct _) ->
+   fun _t1 _t2 ->
+   failwith "Not implemented"
+   (* 
+   match (t1, t2) with
+   | (Ptr Void, Ptr Struct _) ->
     cmap (setval Structured)
-  | (Ptr Struct _, Ptr Void) ->
+   | (Ptr Struct _, Ptr Void) ->
     cmap (setval ())
-  | _ -> failwith "unsupported cast"
-*)
+   | _ -> failwith "unsupported cast"
+ *)
 
 
-let cast_field : type a b. ('s, a) field -> b g -> ('s, b) field =
-  fun field t ->
-  match field, is_ptr_typ t with
-  | PtrField (i, _, _), true -> PtrField (i, t, None)
-  | _ -> failwith "cannot cast data or group field."
+   let cast_field : type a b. ('s, a) field -> b g -> ('s, b) field =
+   fun field t ->
+   match field, is_ptr_typ t with
+   | PtrField (i, _, _), true -> PtrField (i, t, None)
+   | _ -> failwith "cannot cast data or group field."
 
 *)

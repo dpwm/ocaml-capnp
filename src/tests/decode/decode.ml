@@ -23,10 +23,10 @@ module Test_schema = struct
   module TestContainer = struct
     include (Self.TestContainer : Type with type t = Self.TestContainer.t)
     let contents = field t (List Self.Test.t) 0l
-    let list8 = field t (List UInt8) 1l
-    let list16 = field t (List UInt16) 2l
-    let list32 = field t (List Int32) 3l
-    let list64 = field t (List Int32) 4l
+    let list8 = field t (List UInt8) 0l
+    let list16 = field t (List UInt16) 1l
+    let list32 = field t (List Int32) 2l
+    let list64 = field t (List Int32) 3l
   end
 
 end
@@ -86,9 +86,9 @@ let test_decode_list () =
     );
 
     let xs = v |> get Test_schema.TestContainer.list8 in
-    Alcotest.(check (array int)) "uint8 list matches" [|0;1;2;3;2|] xs;
+    Alcotest.(check (array int)) "uint8 list matches" [|0;1;2;3;4|] xs;
     let xs = v |> get Test_schema.TestContainer.list16 in
-    Alcotest.(check (array int)) "uint16 list matches" [|0;1;2;3;2|] xs
+    Alcotest.(check (array int)) "uint16 list matches" [|0;1;2;3;4|] xs
 
 
 let () =
